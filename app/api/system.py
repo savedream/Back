@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
-from app.schemas.common import OkResponse, ok
+from app.common.response import OkResponse, ok
 
 router = APIRouter()
 

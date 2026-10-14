@@ -3,7 +3,8 @@ from enum import Enum
 
 from fastapi import Request
 
-from app.core.errors import ApiError, ErrorCode
+from app.common.error_code import ErrorCode
+from app.common.exceptions import AppError
 
 
 class Component(str, Enum):
@@ -30,4 +31,4 @@ class Readiness:
 def require_ready(request: Request) -> None:
     """음성·엔진이 필요한 API에 붙이는 의존성. 준비 전이면 503 NOT_READY."""
     if not request.app.state.readiness.ready:
-        raise ApiError(ErrorCode.NOT_READY, "준비 중입니다")
+        raise AppError(ErrorCode.NOT_READY)

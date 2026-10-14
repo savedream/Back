@@ -7,8 +7,8 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, FastAPI
 
 from app.api import system
+from app.common.handlers import install_error_handlers
 from app.config import Settings, get_settings
-from app.core.errors import install_error_handlers
 from app.core.readiness import Readiness
 
 

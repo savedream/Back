@@ -1,64 +1,28 @@
-"""오류 코드와 예외 처리기 (명세서 "공통 응답", "오류 처리")."""
+"""전역 예외 핸들러. AppError, 요청 검증 실패(422→400), 처리 못 한 예외(500)를
+실패 봉투 {"ok": false, "error": {"code", "message"}}로 바꾼다 (명세서 "공통 응답", "오류 처리")."""
 import logging
-from enum import Enum
+from typing import Literal
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.schemas.common import ErrorBody, ErrorResponse
+from app.common.error_code import ErrorCode
+from app.common.exceptions import AppError
 
 log = logging.getLogger(__name__)
 
 
-class ErrorCode(str, Enum):
-    """명세서 "오류 처리" 표의 코드. 여기에 없는 코드는 쓰지 않는다."""
-
-    STT_EMPTY = "STT_EMPTY"
-    STT_FAILED = "STT_FAILED"
-    MODEL_TIMEOUT = "MODEL_TIMEOUT"
-    MODEL_FAILED = "MODEL_FAILED"
-    MODEL_PARSE_ERROR = "MODEL_PARSE_ERROR"
-    MODEL_OUT_OF_RANGE = "MODEL_OUT_OF_RANGE"
-    MIC_UNAVAILABLE = "MIC_UNAVAILABLE"
-    SPEAKER_UNAVAILABLE = "SPEAKER_UNAVAILABLE"
-    TTS_FAILED = "TTS_FAILED"
-    DEVICE_UNAVAILABLE = "DEVICE_UNAVAILABLE"
-    GPS_NO_FIX = "GPS_NO_FIX"
-    AUDIO_BUSY = "AUDIO_BUSY"
-    NOT_LISTENING = "NOT_LISTENING"
-    NOT_READY = "NOT_READY"
-    INVALID_REQUEST = "INVALID_REQUEST"
-    CONFIRM_REQUIRED = "CONFIRM_REQUIRED"
-    MANUAL_NOT_FOUND = "MANUAL_NOT_FOUND"
-    SESSION_NOT_FOUND = "SESSION_NOT_FOUND"
-    SAVE_FAILED = "SAVE_FAILED"
-    INTERNAL_ERROR = "INTERNAL_ERROR"
+class ErrorBody(BaseModel):
+    code: str
+    message: str
 
 
-# REST로 나가는 코드의 HTTP 상태. 내부 전용 코드(STT_EMPTY 등)는 없다
-HTTP_STATUS: dict[ErrorCode, int] = {
-    ErrorCode.MIC_UNAVAILABLE: 503,
-    ErrorCode.DEVICE_UNAVAILABLE: 503,
-    ErrorCode.AUDIO_BUSY: 409,
-    ErrorCode.NOT_LISTENING: 409,
-    ErrorCode.NOT_READY: 503,
-    ErrorCode.INVALID_REQUEST: 400,
-    ErrorCode.CONFIRM_REQUIRED: 400,
-    ErrorCode.MANUAL_NOT_FOUND: 404,
-    ErrorCode.SESSION_NOT_FOUND: 404,
-    ErrorCode.SAVE_FAILED: 500,
-    ErrorCode.INTERNAL_ERROR: 500,
-}
-
-
-class ApiError(Exception):
-    def __init__(self, code: ErrorCode, message: str, status: int | None = None):
-        super().__init__(message)
-        self.code = code
-        self.message = message
-        self.status = status if status is not None else HTTP_STATUS.get(code, 500)
+class ErrorResponse(BaseModel):
+    ok: Literal[False] = False
+    error: ErrorBody
 
 
 def error_response(status: int, code: ErrorCode, message: str) -> JSONResponse:
@@ -99,7 +63,7 @@ def _validation_message(exc: RequestValidationError) -> str:
     return f"{field}: {text}" if field else text
 
 
-async def _api_error_handler(request: Request, exc: ApiError) -> JSONResponse:
+async def _app_error_handler(request: Request, exc: AppError) -> JSONResponse:
     return error_response(exc.status, exc.code, exc.message)
 
 
@@ -117,11 +81,11 @@ async def _http_handler(request: Request, exc: StarletteHTTPException) -> JSONRe
 
 async def _unhandled_handler(request: Request, exc: Exception) -> JSONResponse:
     log.exception("처리하지 못한 예외: %s %s", request.method, request.url.path)
-    return error_response(500, ErrorCode.INTERNAL_ERROR, "잠시 후 다시 시도해 주세요")
+    return error_response(500, ErrorCode.INTERNAL_ERROR, ErrorCode.INTERNAL_ERROR.default_message)
 
 
 def install_error_handlers(app: FastAPI) -> None:
-    app.add_exception_handler(ApiError, _api_error_handler)
+    app.add_exception_handler(AppError, _app_error_handler)
     app.add_exception_handler(RequestValidationError, _validation_handler)
     app.add_exception_handler(StarletteHTTPException, _http_handler)
     app.add_exception_handler(Exception, _unhandled_handler)
