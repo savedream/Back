@@ -10,7 +10,7 @@ from collections import OrderedDict, Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-db_path = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / 'data' / 'manual_db_v1.6.json'
+db_path = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / 'data' / 'manual_db.json'
 if len(sys.argv) > 2:
     jsonc_path = Path(sys.argv[2])
 else:
