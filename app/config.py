@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     enable_docs: bool = False
 
     # 경로
-    manual_db_path: Path = BACKEND_DIR / "data" / "manual_db_v1.6.json"
+    manual_db_path: Path = BACKEND_DIR / "data" / "manual_db.json"
     records_db_path: Path = BACKEND_DIR / "records.db"
 
     # 버전 (GET /health)
