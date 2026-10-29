@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI
 
-from app.api import events, session, system, utterances
+from app.api import events, records, session, system, utterances
 from app.common.handlers import install_error_handlers
 from app.config import Settings, get_settings
 from app.core.parts import build_parts
@@ -59,6 +59,7 @@ def create_app(settings: Settings | None = None, *, clock: Clock | None = None) 
     api.include_router(events.router)
     api.include_router(utterances.router)
     api.include_router(session.router)
+    api.include_router(records.router)
     app.include_router(api)
     return app
 
