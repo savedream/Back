@@ -103,11 +103,15 @@ class TurnLock:
         if self._busy:
             raise AppError(ErrorCode.AUDIO_BUSY, "다른 턴을 처리 중입니다")
         self._busy = True
-        self._count += 1
         try:
-            yield f"t_{self._count:04d}"
+            yield self.next_id()
         finally:
             self._busy = False
+
+    def next_id(self) -> str:
+        """잠그지 않고 턴 번호만 하나 매긴다(턴 잠금을 쓰지 않는 세션 초기화용)."""
+        self._count += 1
+        return f"t_{self._count:04d}"
 
 
 class UtteranceReply(BaseModel):

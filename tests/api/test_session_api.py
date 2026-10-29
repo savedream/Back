@@ -1,4 +1,4 @@
-"""세션 API (명세서 "세션"): GET /api/session, GET /api/session/log."""
+"""세션 API (명세서 "세션"): GET /api/session, GET /api/session/log, POST /api/session/reset."""
 import pytest
 
 from app.services.procedure_engine.inputs import SessionResetInput
@@ -186,3 +186,57 @@ async def test_log_of_unknown_session_is_404(kit):
 def test_log_before_ready_has_no_current_session(client):
     res = client.get("/api/session/log")
     assert res.status_code == 404 and res.json()["error"]["code"] == "SESSION_NOT_FOUND"
+
+
+async def reset(kit: Kit, **kwargs):
+    return await kit.http.post("/api/session/reset", **kwargs)
+
+
+@pytest.mark.parametrize("kwargs", [{}, {"json": {}}, {"json": {"confirm": False}}, {"json": {"confirm": "true"}}])
+async def test_reset_needs_confirm(kit, kwargs):
+    before = kit.state.session_id
+    res = await reset(kit, **kwargs)
+    assert res.status_code == 400
+    assert res.json() == {"ok": False, "error": {"code": "CONFIRM_REQUIRED", "message": "confirm: true가 필요합니다"}}
+    assert kit.state.session_id == before
+
+
+def test_reset_before_ready_is_503(client):
+    res = client.post("/api/session/reset", json={"confirm": True})
+    assert res.status_code == 503 and res.json()["error"]["code"] == "NOT_READY"
+
+
+async def test_reset_fails_when_records_cannot_be_saved(kit):
+    kit.parts.records.fail_next_save("user_utterance")
+    await kit.say("사람이 쓰러졌는데 숨을 안 쉬어")
+    before = kit.state
+    kit.parts.records.fail_next_save()  # 초기화 전에 다시 저장해 봐도 실패
+    res = await reset(kit, json={"confirm": True})
+    assert res.status_code == 500
+    assert res.json() == {"ok": False, "error": {"code": "SAVE_FAILED", "message": "기록 1건을 저장하지 못했습니다"}}
+    await kit.settle()
+    assert kit.state == before  # 새 세션을 만들지 않는다
+
+
+async def test_reset_opens_new_session(kit):
+    kit.parts.records.fail_next_save("user_utterance")
+    await at_s5b(kit)
+    first = kit.state
+    assert kit.parts.records.unsaved() and kit.parts.devices.on == {2}
+    mark = len(kit.spoken)
+    res = await reset(kit, json={"confirm": True})
+    assert res.status_code == 200, res.text
+    assert res.json()["data"] == {"session_id": first.session_id + "_2", "previous_session_id": first.session_id}
+    await kit.settle()
+    s = kit.state
+    assert kit.parts.records.unsaved() == []  # 미저장 기록을 먼저 저장했다
+    assert s.session_id == first.session_id + "_2" and s.mode == "idle" and s.step_id is None
+    assert s.alerts == [] and s.timer.status == "idle" and kit.parts.devices.on == set()  # 소리 끄기·알림 취소
+    welcome = kit.spoken_since(mark)
+    assert [u.template_id for u in welcome] == ["T_WELCOME"]
+    say_event = next(e for e in kit.events if e.type == "guide.say" and e.data["utterance_id"] == welcome[0].utterance_id)
+    assert say_event.turn_id.startswith("t_")
+    ended = [e.data for e in kit.events if e.type == "alert.ended"]
+    assert ended == [{"alert_id": first.alerts[0].alert_id, "reason": "cancel"}]
+    logged = await get_log(kit, session_id=first.session_id)  # 지난 세션 기록은 지우지 않는다
+    assert len(logged["records"]) == len([r for r in kit.records if r.session_id == first.session_id])

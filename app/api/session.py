@@ -1,15 +1,19 @@
-"""세션 API (명세서 "세션"): GET /api/session, GET /api/session/log."""
+"""세션 API (명세서 "세션"): GET /api/session, GET /api/session/log, POST /api/session/reset."""
 from datetime import datetime
+from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
+from pydantic import BaseModel
 
 from app.common.error_code import ErrorCode
 from app.common.exceptions import AppError
-from app.common.response import ok
+from app.common.response import OkResponse, ok
+from app.core.readiness import require_ready
 from app.schemas.record import Record
 from app.schemas.session import SessionState
 from app.services.manual_db import ManualDB
 from app.services.procedure_engine.context import Ctx
+from app.services.procedure_engine.inputs import SessionResetInput
 from app.services.procedure_engine.timers import listen_state
 from app.services.procedure_engine.view import session_fields
 
@@ -62,6 +66,32 @@ async def get_session_log(request: Request, session_id: str | None = None):
         "unsaved": sum(r.session_id == session_id for r in parts.records.unsaved()),
         "records": [r.model_dump(exclude={"session_id"}) for r in records],
     })
+
+
+class ResetIn(BaseModel):
+    confirm: Any = None  # true일 때만 초기화한다
+
+
+class ResetOut(BaseModel):
+    session_id: str
+    previous_session_id: str | None
+
+
+@router.post("/session/reset", response_model=OkResponse[ResetOut], dependencies=[Depends(require_ready)])
+async def reset_session(request: Request, body: ResetIn | None = None):
+    """미저장 기록을 먼저 저장하고 새 세션을 연다(소리 끄기·알림 취소·T_WELCOME). 지난 세션 기록은 지우지 않는다.
+
+    그래도 남은 기록이 있으면 새 세션을 만들지 않고 500 SAVE_FAILED. 턴 잠금은 쓰지 않고(명세 오류 목록에 AUDIO_BUSY가 없음)
+    턴 번호만 하나 받는다.
+    """
+    if body is None or body.confirm is not True:
+        raise AppError(ErrorCode.CONFIRM_REQUIRED)
+    state = request.app.state
+    _, left = await state.parts.records.retry_now()
+    if left:
+        raise AppError(ErrorCode.SAVE_FAILED, f"기록 {left}건을 저장하지 못했습니다")
+    result = await state.parts.engine.submit(SessionResetInput(turn_id=state.turn_lock.next_id()))
+    return ok(ResetOut(session_id=result.state.session_id, previous_session_id=result.state.previous_session_id))
 
 
 def _session_data(state: SessionState, ctx: Ctx, seq: int, mic: str, records: list[Record], debug: bool) -> dict:
