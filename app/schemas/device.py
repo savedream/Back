@@ -33,6 +33,7 @@ class DeviceState(BaseModel):
     name: Literal["metronome", "rescue_signal"]
     connected: bool = True
     status: DeviceStatus = "off"
+    want: Literal["on", "off"] = "off"  # 엔진이 마지막으로 요청한 상태(응답 전 판단용). 화면 표시는 status
     held_by: Literal["tts", "recording"] | None = None
     queued: dict | None = None  # 지금 읽는 문장이 끝나면 실행할 요청 {"type", "source"}
     last_result: DeviceResultValue | None = None
