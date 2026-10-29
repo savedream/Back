@@ -51,10 +51,11 @@ class Rig:
         self.speaker = ScriptSpeaker(self.timeline)
         self.devices = ScriptDevices(self.timeline)
         self.records = MemoryRecordStore()
-        self.bus = EventBus(FakeClock())
+        self.clock = FakeClock()
+        self.bus = EventBus(self.clock)
         self.sub = self.bus.subscribe(maxsize=0)  # 0: 크기 제한 없음
         self.seq = Sequencer(DB, self.bus, self.speaker, self.devices, self.records, self.feed, lambda: STATE,
-                             device_timeout_s)
+                             self.clock, device_timeout_s)
 
     async def feed(self, inp):
         self.fed.append(inp)
@@ -131,9 +132,11 @@ async def test_append_keeps_current_batch(rig):
 
 async def test_device_runs_after_preceding_say_and_does_not_block_next_say(rig):
     rig.devices.hang = True
-    rig.seq._device_timeout_s = 0.01
     rig.seq.submit(result(say(1), device(2), say(3)))
-    await asyncio.sleep(0.05)  # 장치 응답 제한 0.01초가 실제로 지나가게
+    while len(rig.timeline) < 4:
+        await asyncio.sleep(0)
+    assert not rig.seq.idle  # 장치 응답을 기다리는 중
+    rig.clock.advance(2)  # 응답 제한 2초(엔진 시계)
     await until_idle(rig.seq)
     assert rig.timeline[:4] == [("say", "u_1"), ("finished", "x_1", "done"), ("device", 2, 1), ("say", "u_3")]
     [res] = [i for i in rig.fed if isinstance(i, DeviceResultInput)]

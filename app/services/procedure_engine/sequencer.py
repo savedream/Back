@@ -15,6 +15,7 @@ from app.services.devices import DeviceController
 from app.services.events import EventSink
 from app.services.manual_db import ManualDB
 from app.services.procedure_engine.actions import Action, DeviceAction, EngineResult, RecordAction, SayAction
+from app.services.procedure_engine.clock import Clock
 from app.services.procedure_engine.inputs import DeviceResultInput, EngineInput, PlaybackInput, RecordSavedInput
 from app.services.procedure_engine.timers import listen_state
 from app.services.records import RecordSink
@@ -55,8 +56,9 @@ class _Item:
 class Sequencer:
     def __init__(self, db: ManualDB, events: EventSink, speaker: Speaker, devices: DeviceController,
                  records: RecordSink, feed: Callable[[EngineInput], Awaitable[object]],
-                 state: Callable[[], SessionState], device_timeout_s: float):
+                 state: Callable[[], SessionState], clock: Clock, device_timeout_s: float):
         self._db = db
+        self._clock = clock
         self._events = events
         self._speaker = speaker
         self._devices = devices
@@ -143,7 +145,9 @@ class Sequencer:
                     result = "text_only"
             await self._feed(PlaybackInput(action_id=action.action_id, event="finished", result=result))
         elif isinstance(action, DeviceAction):
-            self._spawn(self._device(action))
+            # 바로 앞 문장이 끝난 지금 명령을 내고(다음 문장보다 먼저), 응답은 기다리지 않는다
+            call = asyncio.ensure_future(self._devices.execute(action.command))
+            self._spawn(self._device(action, call))
         elif isinstance(action, RecordAction):
             self._spawn(self._record(action))
 
@@ -179,18 +183,29 @@ class Sequencer:
             return "text_only"
         return task.result()
 
-    async def _device(self, action: DeviceAction) -> None:
+    async def _device(self, action: DeviceAction, call: asyncio.Future) -> None:
         command = action.command
-        try:
-            outcome = await asyncio.wait_for(self._devices.execute(command), self._device_timeout_s)
-            status, detail = outcome.status, outcome.detail
-        except TimeoutError:
-            status, detail = "timeout", None
-        except Exception:
-            log.exception("장치 명령 실패: %s", command)
-            status, detail = "failed", None
+        status, detail = await self._wait_device(command, call)
         await self._feed(DeviceResultInput(action_id=action.action_id, object=command.object, status=status,
                                            detail=detail))
+
+    async def _wait_device(self, command, task: asyncio.Future) -> tuple[str, dict | None]:
+        """장치 응답을 device_timeout_s까지 기다린다. 시간은 엔진 시계로 잰다(시험에서는 FakeClock으로 넘긴다)."""
+        timer = asyncio.ensure_future(self._clock.sleep_until(self._clock.now() + self._device_timeout_s))
+        try:
+            await asyncio.wait({task, timer}, return_when=asyncio.FIRST_COMPLETED)
+            answered = task.done()
+        finally:
+            for t in (task, timer):
+                if not t.done():
+                    t.cancel()
+        if not answered:
+            return "timeout", None
+        if task.exception() is not None:
+            log.error("장치 명령 실패: %s", command, exc_info=task.exception())
+            return "failed", None
+        outcome = task.result()
+        return outcome.status, outcome.detail
 
     async def _record(self, action: RecordAction) -> None:
         try:

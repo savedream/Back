@@ -34,7 +34,7 @@ class EngineService:
         self.events = events
         self._location = location  # GPS 스냅샷. GPS 모듈이 없으면 None
         self.state: SessionState | None = None
-        self.sequencer = Sequencer(db, events, speaker, devices, records, self.submit, lambda: self.state,
+        self.sequencer = Sequencer(db, events, speaker, devices, records, self.submit, lambda: self.state, clock,
                                    device_timeout_s)
         self._queue: asyncio.Queue[tuple[EngineInput, bool, asyncio.Future]] = asyncio.Queue()
         self._pending = 0  # 넣었지만 아직 리듀스하지 않은 입력

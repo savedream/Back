@@ -214,3 +214,13 @@ async def test_every_spoken_sentence_comes_from_db(kit):
     assert len(kit.spoken) > 10
     for u in kit.spoken:
         assert_from_db(u)
+
+
+async def test_device_timeout_shows_unknown(kit):
+    await kit.say("사람이 쓰러졌는데 숨을 안 쉬어")
+    await kit.say("아니요 대답 없어요")
+    kit.parts.devices.fail_next("timeout")
+    await kit.say("아니요", settle=False)  # 메트로놈 켜기 명령에 장치가 답하지 않음
+    await kit.advance(2)
+    metronome = kit.state.devices["metronome"]
+    assert (metronome.status, metronome.last_result) == ("unknown", "timeout")  # 성공으로 표시하지 않는다
