@@ -21,10 +21,8 @@ class Settings(BaseSettings):
     manual_db_path: Path = BACKEND_DIR / "data" / "manual_db.json"
     records_db_path: Path = BACKEND_DIR / "records.db"
 
-    # 버전 (GET /health)
+    # 버전 (GET /health). 매뉴얼 DB 버전은 적재한 DB의 meta.version에서 읽는다
     app_version: str = "1.3.0"
-    # TODO(1단계): 매뉴얼 DB 로더가 생기면 meta.version에서 읽는다
-    manual_db_version: str = "v1.7"
     model_version: str = "v2.2"
 
     # TODO(미정: 임시값) 3초 지연 예산 배분과 실측 뒤 확정
