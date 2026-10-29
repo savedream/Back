@@ -71,6 +71,18 @@ def test_old_unconscious_values_do_not_restart_cardiac(kit):
     assert out[0] == ("step", "MON-04") and ("intro", "EM-01") not in out
 
 
+def test_i1_skipped_when_situation_report_branches_into_cardiac(kit):
+    kit.model.add("상황이 잘 모르겠어요",
+                  "<maum_0>(situation=-1, conscious=-1, breathing=-1, bleeding=-1, movement=-1, scene_danger=-1)<maum_end>")
+    kit.model.add("숨을 전혀 안 쉬는 것 같아요",
+                  "<maum_0>(situation=-1, conscious=-1, breathing=0, bleeding=-1, movement=-1, scene_danger=-1)<maum_end>")
+    kit.say("상황이 잘 모르겠어요")
+    kit.say("아니요")  # 대답하지 않음 → 의식 [0]
+    assert kit.state.step_id == "EM00-04"
+    # 호흡 질문의 '아니요' 분기 목적지(EM01-05)가 심정지 매뉴얼이라 I1을 걸지 않고 그 분기로 간다(확인 응답과 같은 결과)
+    assert ids(kit.say("숨을 전혀 안 쉬는 것 같아요")) == [("step", "EM01-05")]
+
+
 def test_s5_compression_and_i2_recovery(kit):
     kit.say("사람이 쓰러졌는데 숨을 안 쉬어")
     assert ids(kit.say("아니요 대답 없어요")) == [("step", "EM01-02"), ("step", "EM01-03"), ("template", "T_GPS_OK"),

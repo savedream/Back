@@ -1,5 +1,5 @@
 """사용자 턴 처리 (명세서 6-4): 모델 출력별, 해석·인식 실패, 대기 단계 진행 표현. 입력 하나에 단계 이동은 한 번만."""
-from app.schemas.function_call import FunctionCall
+from app.schemas.function_call import FunctionCall, Observation
 from app.schemas.record import UserReportRecord, UserUtteranceRecord
 from app.schemas.session import ObservedValue
 from app.services.procedure_engine import engine_constants as C
@@ -45,7 +45,7 @@ def handle_function_call(run: Run, inp: FunctionCallInput) -> None:
         clear_prompt(run)
 
     if func == 0:
-        _report_situation(run, fc)
+        _report_situation(run, inp, fc)
     elif func == 1:
         _answer_check(run, inp, fc)
     elif func == 2:
@@ -77,23 +77,31 @@ def _during_switch_confirm(run: Run, fc: FunctionCall) -> None:
         reask_prompt(run)
 
 
-def _report_situation(run: Run, fc: FunctionCall) -> None:
+def _situation_branch(run: Run, inp: FunctionCallInput, fc: FunctionCall) -> str | None:
+    """상황 설명 5번: 지금 질문의 slot 값이 함께 왔으면 그 값으로 갈 분기."""
+    step = current_step(run)
+    if step is None or step["kind"] != "ask" or not step["slot"]:
+        return None
+    value = getattr(fc.observation, step["slot_key"])
+    return slot_branch(step, [value]) if value != -1 else None
+
+
+def _report_situation(run: Run, inp: FunctionCallInput, fc: FunctionCall) -> None:
     store_observation(run, fc.observation, "situation")
-    if try_i1(run, None, fc.observation) or try_i2(run, fc.observation):
-        return
     situation = fc.args["situation"]
     active = run.s.active_manual_id
-    if active and situation != -1 and run.db.manual_by_situation[situation]["manual_id"] != active:
+    switching = bool(active) and situation != -1 and run.db.manual_by_situation[situation]["manual_id"] != active
+    step = current_step(run)
+    branch = None if switching else _situation_branch(run, inp, fc)
+    if try_i1(run, step[branch] if branch else None, fc.observation) or try_i2(run, fc.observation):
+        return
+    if switching:
         switch(run, situation, fc)
         return
-    step = current_step(run)
-    if step is not None and step["kind"] == "ask" and step["slot"]:
-        value = getattr(fc.observation, step["slot_key"])
-        branch = slot_branch(step, [value]) if value != -1 else None
-        if branch:
-            log_answer(run, step, [value], "answer", branch)
-            goto(run, step[branch])
-            return
+    if branch:
+        log_answer(run, step, [getattr(fc.observation, step["slot_key"])], "answer", branch)
+        goto(run, step[branch])
+        return
     if run.s.mode == "idle":
         new_routing(run, routing_target_manual(run, situation))
         route(run, situation)
@@ -168,34 +176,38 @@ def _user_report(run: Run, inp, report: str, step_id: str, basis: str) -> None:
                                 from_record=run.user_record_id))
 
 
-def _correct(run: Run, fc: FunctionCall) -> None:
-    store_observation(run, fc.observation, "correction")
-    if try_i1(run, None, fc.observation):
-        return
-    key = next(k for k, v in fc.observation.model_dump().items() if v != -1)
-    value = getattr(fc.observation, key)
+def _correction(run: Run, observation: Observation) -> tuple[int, dict, int, str] | None:
+    """정정한 값으로 분기했던 가장 최근 질문과 새 분기. 그런 질문이 없거나 분기가 같으면 None."""
+    key = next(k for k, v in observation.model_dump().items() if v != -1)
+    value = getattr(observation, key)
     for index in range(len(run.s.answer_log) - 1, -1, -1):
         entry = run.s.answer_log[index]
-        if entry.slot_key != key:
-            continue
-        step = run.db.steps_by_id[entry.step_id]
-        branch = slot_branch(step, [value])
-        if branch is None or branch == entry.branch:
-            run.say_template("T_CORRECT_KEEP")
-            ask_again(run)
-            return
-        run.say_template("T_CORRECT")
-        cancel_alerts(run, lambda a: a.log_index > index)  # 되돌린 지점 이후에 건 알림
-        target = step[branch]
-        if manual_of(run, target) not in (C.CARDIAC_MANUAL, C.AED_MANUAL):
-            leave_compression(run)
-        run.s.answer_log = run.s.answer_log[: index + 1]
-        log_answer(run, step, [value], "answer", branch)
-        run.preempt()
-        goto(run, target)
+        if entry.slot_key == key:
+            step = run.db.steps_by_id[entry.step_id]
+            branch = slot_branch(step, [value])
+            return (index, step, value, branch) if branch and branch != entry.branch else None
+    return None
+
+
+def _correct(run: Run, fc: FunctionCall) -> None:
+    store_observation(run, fc.observation, "correction")
+    found = _correction(run, fc.observation)
+    if try_i1(run, found[1][found[3]] if found else None, fc.observation):
         return
-    run.say_template("T_CORRECT_KEEP")  # 그런 질문이 아직 없으면 값만 바꾼다
-    ask_again(run)
+    if found is None:
+        run.say_template("T_CORRECT_KEEP")  # 그런 질문이 아직 없거나 분기가 같으면 값만 바꾼다
+        ask_again(run)
+        return
+    index, step, value, branch = found
+    run.say_template("T_CORRECT")
+    cancel_alerts(run, lambda a: a.log_index > index)  # 되돌린 지점 이후에 건 알림
+    target = step[branch]
+    if manual_of(run, target) not in (C.CARDIAC_MANUAL, C.AED_MANUAL):
+        leave_compression(run)
+    run.s.answer_log = run.s.answer_log[: index + 1]
+    log_answer(run, step, [value], "answer", branch)
+    run.preempt()
+    goto(run, target)
 
 
 def repeat(run: Run, scope: int, speed: int) -> None:
