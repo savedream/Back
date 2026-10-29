@@ -38,7 +38,7 @@ def create_app(settings: Settings | None = None, *, clock: Clock | None = None) 
         if readiness.ready:
             await parts.start_engine()
         yield
-        parts.events.close_all()  # 열린 SSE 스트림을 먼저 닫는다(서버 정상 종료를 붙잡지 않게)
+        parts.events.close_all()  # 남은 구독 정리(uvicorn으로 띄웠으면 app/run.py가 연결을 기다리기 전에 이미 닫음)
         await parts.engine.stop()
         await parts.records.close()  # 엔진을 멈춘 뒤 남은 기록 쓰기를 마친다
 

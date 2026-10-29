@@ -139,3 +139,13 @@ async def test_exit_signal_closes_open_stream_first(live):
             live.server.handle_exit(signal.SIGINT, None)  # Ctrl+C와 같은 경로(신호 처리기)
             assert await frames.next() is None  # 서버가 스트림을 닫는다
     assert await live.stopped() < TIMEOUT < live.server.config.timeout_graceful_shutdown
+
+
+async def test_should_exit_also_closes_open_stream(live):
+    async with httpx.AsyncClient(base_url=live.url, timeout=TIMEOUT) as http:
+        async with http.stream("GET", "/api/events") as res:
+            frames = Frames(res)
+            assert await frames.next() == ["retry: 1000"]
+            live.server.should_exit = True  # 신호가 아닌 종료(예: 전원 종료 API)
+            assert await frames.next() is None
+    assert await live.stopped() < TIMEOUT < live.server.config.timeout_graceful_shutdown
