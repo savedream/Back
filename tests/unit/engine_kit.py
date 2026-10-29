@@ -68,15 +68,21 @@ class EngineKit:
         return res
 
     def _assert_not_stuck(self) -> None:
-        """되먹임까지 다 끝났는데 say 단계에 서 있거나, 들을 수 있는 질문인데 무응답 마감이 없으면 멈춘 것이다."""
+        """되먹임까지 다 끝났는데 멈춰 있으면 실패: say 단계에 서 있음, 들을 수 있는 질문인데 무응답 마감이 없음,
+        다 읽은 확인 질문에 15초 마감이 없음, 대기 시간이 있는 대기에 마감이 없음."""
         s = self.state
         step = DB.steps_by_id.get(s.step_id) if s.step_id else None
         if step is None or s.pending_says or s.speech_active or self._after_barge_in:
             return
         assert step["kind"] in ("ask", "wait") or s.pending_prompt is not None, f"say 단계 {s.step_id}에 멈춤"
+        if s.pending_prompt is not None:
+            assert s.pending_prompt.deadline is not None, f"확인 질문 {s.pending_prompt.type}에 마감이 없음"
+            return
         listening = not s.mic.paused and s.devices["rescue_signal"].want != "on"
-        if step["kind"] == "ask" and s.pending_prompt is None and listening:
+        if step["kind"] == "ask" and listening:
             assert s.no_speech.deadline is not None, f"질문 {s.step_id}에 무응답 마감이 없음"
+        if step["kind"] == "wait" and step["wait_timeout_s"] and s.wait_timeouts.get(s.step_id, 0) < 3:
+            assert s.wait_deadline is not None, f"대기 {s.step_id}에 마감이 없음"
 
     def _apply(self, res: EngineResult) -> None:
         self.state = res.state

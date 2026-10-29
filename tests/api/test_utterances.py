@@ -84,10 +84,18 @@ async def test_second_turn_while_first_is_processing_is_409(kit):
 async def test_events_for_a_text_turn(kit):
     mark = len(kit.events)
     await kit.say("등산하다 넘어졌는데 다리를 움직이기 어려워요", speak=True)
-    kinds = [(e.type, e.data.get("state")) for e in kit.events[mark:]
-             if e.type in ("speech.state", "turn.result", "session.updated", "turn.latency")]
+    def label(e):
+        if e.type == "speech.state":
+            return e.data["state"]
+        if e.type in ("guide.step", "guide.say"):
+            return e.data.get("template_id") or e.data["step_id"] or e.data["manual_id"]
+        return None
+
+    kinds = [(e.type, label(e)) for e in kit.events[mark:]
+             if e.type in ("speech.state", "turn.result", "session.updated", "turn.latency", "guide.step", "guide.say")]
     assert kinds == [("speech.state", "processing"), ("turn.result", None), ("session.updated", None),
-                     ("speech.state", "speaking"), ("turn.latency", None), ("speech.state", "armed")]
+                     ("guide.say", "EM-03"), ("speech.state", "speaking"), ("turn.latency", None),
+                     ("guide.step", "EM03-01"), ("guide.say", "EM03-01"), ("speech.state", "armed")]
     latency = next(e for e in kit.events[mark:] if e.type == "turn.latency")
     assert latency.turn_id == "t_0001"
     assert set(latency.data) == {"vad_tail", "stt", "normalize", "model", "parse", "engine", "tts_first", "e2e"}
