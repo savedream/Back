@@ -94,6 +94,11 @@ class Sequencer:
         items = ([self._current] if self._current is not None else []) + list(self._queue)
         return any(isinstance(i.action, SayAction) and not i.cut for i in items)
 
+    @property
+    def speech_state(self) -> str | None:
+        """마지막으로 낸 speech.state의 state. 아직 내지 않았으면 None."""
+        return self._speech["state"] if self._speech is not None else None
+
     def submit(self, result: EngineResult, speak: bool = True) -> Batch:
         if result.mode == "replace":
             self._cut()
