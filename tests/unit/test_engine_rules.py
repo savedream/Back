@@ -155,6 +155,15 @@ def test_s8_correction_during_compression(kit):
     assert [a.step_id for a in s.alerts] == ["MON-07"]  # EM01-09의 120초 알림은 취소, MON-07의 180초 알림
 
 
+def test_correction_with_two_values_rebranches_latest_question(kit):
+    kit.model.add("아까 잘못 말했어 대답도 하고 숨도 쉬어",
+                  "<maum_2>(conscious=1, breathing=1, bleeding=-1, movement=-1, scene_danger=-1)<maum_end>")
+    at_s5b(kit)
+    # 의식(EM01-01)보다 나중에 분기한 호흡(EM01-04)을 다시 분기한다. S8의 호흡 정정과 같은 곳으로
+    assert ids(kit.say("아까 잘못 말했어 대답도 하고 숨도 쉬어")) == [("template", "T_CORRECT"), ("step", "MON-05")]
+    assert kit.state.observation["conscious"].allowed == [1]  # 의식 값도 저장은 한다
+
+
 @pytest.mark.parametrize("text, expected, speed", [
     ("다시 말해 줘", [("step", "EM03-04")], 0),
     ("처음부터 다시", [("step", "EM03-04")], 0),

@@ -178,12 +178,15 @@ def _user_report(run: Run, inp, report: str, step_id: str, basis: str) -> None:
 
 
 def _correction(run: Run, observation: Observation) -> tuple[int, dict, int, str] | None:
-    """정정한 값으로 분기했던 가장 최근 질문과 새 분기. 그런 질문이 없거나 분기가 같으면 None."""
-    key = next(k for k, v in observation.model_dump().items() if v != -1)
-    value = getattr(observation, key)
+    """정정한 값으로 분기했던 가장 최근 질문과 새 분기. 그런 질문이 없거나 분기가 같으면 None.
+
+    관찰값이 여럿이면 모두 저장하되, 그중 가장 최근에 분기한 질문 하나만 다시 분기한다(입력 하나에 단계 이동은 한 번).
+    """
+    said = {k: v for k, v in observation.model_dump().items() if v != -1}
     for index in range(len(run.s.answer_log) - 1, -1, -1):
         entry = run.s.answer_log[index]
-        if entry.slot_key == key:
+        if entry.slot_key in said:
+            value = said[entry.slot_key]
             step = run.db.steps_by_id[entry.step_id]
             branch = slot_branch(step, [value])
             return (index, step, value, branch) if branch and branch != entry.branch else None
