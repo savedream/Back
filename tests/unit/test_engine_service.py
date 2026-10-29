@@ -280,6 +280,49 @@ async def test_failed_tick_skips_only_that_deadline(kit, monkeypatch):
     assert ids(await kit.advance(15)) == [("template", "T_NO_SPEECH"), ("step", "EM03-04")]  # 다른 마감은 그대로
 
 
+def fail_once(monkeypatch, kind: str) -> list:
+    real_reduce = service_module.reduce
+    failures = []
+
+    def broken(state, inp, ctx):
+        if inp.kind == kind and not failures:
+            failures.append(inp)
+            raise RuntimeError("시험용 오류")
+        return real_reduce(state, inp, ctx)
+
+    monkeypatch.setattr(service_module, "reduce", broken)
+    return failures
+
+
+async def test_failed_playback_feedback_does_not_stop_timers(kit, monkeypatch):
+    failures = fail_once(monkeypatch, "playback")
+    await kit.say("등산하다 넘어졌는데 다리를 움직이기 어려워요")
+    assert failures and kit.state.pending_says == {}  # 실패한 낭독 끝 되먹임도 읽은 것으로 정리
+    assert ids(await kit.advance(15)) == [("template", "T_NO_SPEECH"), ("step", "EM03-01")]
+
+
+async def test_failed_turn_after_speech_does_not_freeze_alerts(kit, monkeypatch):
+    await at_s5b(kit)
+    await kit.engine.submit(SpeechActivityInput(state="started"))
+    fail_once(monkeypatch, "function_call")
+    with pytest.raises(RuntimeError):
+        await kit.engine.submit(kit.turn("네"))
+    assert kit.state.speech_active is False  # 그 턴은 끝난 것으로
+    assert ids(await kit.advance(120)) == [("step", "EM01-10"), ("step", "EM01-11")]
+
+
+async def test_failed_event_publish_still_speaks(kit, monkeypatch):
+    real = kit.bus.publish
+
+    def broken(type, turn_id, data):
+        if type == "session.updated":
+            raise RuntimeError("시험용 오류")
+        return real(type, turn_id, data)
+
+    monkeypatch.setattr(kit.bus, "publish", broken)
+    assert ids(await kit.say("등산하다 넘어졌는데 다리를 움직이기 어려워요")) == [("intro", "EM-03"), ("step", "EM03-01")]
+
+
 async def test_tick_that_changes_nothing_is_not_repeated(kit, monkeypatch):
     await at_s1b(kit)
     real_reduce = service_module.reduce

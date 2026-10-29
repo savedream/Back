@@ -14,7 +14,7 @@ from app.services.manual_db import ManualDB
 from app.services.procedure_engine.actions import EngineResult
 from app.services.procedure_engine.clock import Clock
 from app.services.procedure_engine.context import Ctx
-from app.services.procedure_engine.core import new_session, reduce
+from app.services.procedure_engine.core import new_session, recover, reduce
 from app.services.procedure_engine.inputs import EngineInput, TickInput
 from app.services.procedure_engine.sequencer import Batch, Sequencer
 from app.services.procedure_engine.timers import deadlines
@@ -118,6 +118,8 @@ class EngineService:
         except Exception as e:
             log.exception("엔진 입력 처리 실패: %s", inp.kind)
             self._skipped |= due
+            if inp.kind != "tick":
+                self._recover(inp)
             if future is not None and not future.done():
                 future.set_exception(e)
             return
@@ -128,17 +130,32 @@ class EngineService:
         if future is not None and not future.done():
             future.set_result((result, batch))
 
+    def _recover(self, inp: EngineInput) -> None:
+        try:
+            self.state = recover(self.state, inp, self._ctx()).state
+        except Exception:
+            log.exception("실패한 입력 뒤 정리도 실패: %s", inp.kind)
+
     def _apply(self, before: SessionState | None, result: EngineResult, ctx: Ctx, speak: bool) -> Batch:
         self.state = result.state
+        # 시퀀서에 먼저 넘긴다. 시퀀서는 이 함수가 끝나 차례가 와야 돌므로 이벤트 순서는 그대로이고,
+        # 이벤트 발행이 실패해도 낭독이 빠지지 않는다(빠지면 남은 문장 때문에 마감이 걸리지 않는다)
+        batch = self.sequencer.submit(result, speak)
         events = result.events
         for e in (e for e in events if e.type == "turn.result"):
-            self.events.publish(e.type, result.turn_id, e.data)
+            self._publish(e.type, result.turn_id, e.data)
         changes = session_changes(before, result.state, ctx)
         if changes:
-            self.events.publish("session.updated", result.turn_id, changes)
+            self._publish("session.updated", result.turn_id, changes)
         for e in (e for e in events if e.type != "turn.result"):
-            self.events.publish(e.type, result.turn_id, e.data)
-        return self.sequencer.submit(result, speak)
+            self._publish(e.type, result.turn_id, e.data)
+        return batch
+
+    def _publish(self, type: str, turn_id: str | None, data: dict) -> None:
+        try:
+            self.events.publish(type, turn_id, data)
+        except Exception:
+            log.exception("이벤트 발행 실패: %s", type)
 
 
 def _log_crash(task: asyncio.Task) -> None:

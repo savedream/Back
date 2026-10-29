@@ -56,6 +56,21 @@ def reduce(state: SessionState, inp: EngineInput, ctx: Ctx) -> EngineResult:
     return run.result()
 
 
+def recover(state: SessionState, inp: EngineInput, ctx: Ctx) -> EngineResult:
+    """입력 처리가 예외로 실패했을 때(엔진 버그) 멈추지 않게 최소한만 정리한다.
+
+    그 문장은 다 읽은 것으로, 그 턴은 끝난 것으로 보고 마감을 다시 건다. 남은 문장이나 말소리 상태 하나 때문에
+    무응답·확인 질문·알림 타이머가 모두 멈추는 것을 막는다.
+    """
+    run = Run(state, ctx, getattr(inp, "turn_id", None))
+    if inp.kind == "playback":
+        run.s.pending_says.pop(inp.action_id, None)
+    if inp.kind in ("function_call", "model_error", "progress_phrase", "speech_activity"):
+        run.s.speech_active = False
+    timers.sync_timers(run)
+    return run.result()
+
+
 def _barge_in(run: Run) -> None:
     """낭독 중 말하기 버튼: 남은 낭독을 끊고 엔진 위치를 아직 다 읽지 않은 첫 단계로 되돌린다(6-2).
 
