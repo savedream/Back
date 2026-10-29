@@ -71,6 +71,7 @@ class SqliteRecordStore:
     """SQLite 기록 저장소. 기록은 받는 즉시 메모리에 두고 전용 쓰기 스레드가 큐 순서대로 저장한다.
 
     실패하면 saved: false로 두고, 재시도 태스크가 엔진 시계로 retry_base_s부터 두 배씩(최대 retry_max_s) 기다렸다 다시 저장한다.
+    세션 표의 행도 실패하면 같은 재시도 대상이다.
     sqlite3 연결은 쓰기 스레드 안에서만 만들고 쓴다. 상태 스냅샷(6-14)도 run()으로 같은 스레드에서 저장한다.
     """
 
@@ -84,12 +85,14 @@ class SqliteRecordStore:
         self._jobs: queue.SimpleQueue = queue.SimpleQueue()  # (작업 함수, Future). None이면 스레드를 끝낸다
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
+        self._closing = False  # close()를 시작함. 새 재시도 태스크를 띄우지 않는다
         self._closed = False
         self._failures: list[str | None] = []
         self._all: list[Record] = []  # 이 프로세스에서 받은 기록(발생 순서)
         self._sessions: dict[str, list[Record]] = {}  # 이 프로세스에서 연 세션별 기록(발생 순서)
         self._session_info: dict[str, dict] = {}
         self._unsaved: dict[tuple[str, str], Record] = {}  # 저장에 실패해 다시 저장할 기록
+        self._unsaved_sessions: dict[str, dict] = {}  # 저장에 실패해 다시 저장할 세션 표의 행
         self._retry_lock = asyncio.Lock()
         self._retry_task: asyncio.Task | None = None
 
@@ -100,12 +103,16 @@ class SqliteRecordStore:
         self._thread.start()
 
     async def close(self) -> None:
-        """재시도를 멈추고 큐에 남은 쓰기를 마친 뒤 쓰기 스레드를 끝낸다."""
+        """재시도를 멈추고 미저장 기록·세션을 마지막으로 한 번 더 저장해 본 뒤, 큐에 남은 쓰기를 마치고 쓰기 스레드를 끝낸다."""
+        if self._thread is None or self._closing:
+            return
+        self._closing = True
         if self._retry_task is not None:
             self._retry_task.cancel()
             await asyncio.gather(self._retry_task, return_exceptions=True)
-        if self._thread is None or self._closed:
-            return
+        # 앞서 넣은 쓰기 결과가 모두 반영된 뒤에(같은 기록을 두 번 넣지 않게) 다시 저장한다
+        await asyncio.gather(self._enqueue(lambda conn: None), return_exceptions=True)
+        await self.retry_now()
         self._closed = True
         self._jobs.put(None)
         await asyncio.to_thread(self._thread.join)
@@ -120,7 +127,8 @@ class SqliteRecordStore:
         return list(self._unsaved.values())
 
     def fail_next_save(self, kind: str | None = None) -> None:
-        """다음 저장 하나를 실패시킨다(재시도 포함). kind를 주면 그 종류의 다음 기록만. 쓰기 스레드가 SQL을 쓰기 전에 실패로 처리한다."""
+        """다음 저장 하나를 실패시킨다(재시도 포함). kind를 주면 그 종류의 다음 기록만(세션 표의 행은 "session").
+        쓰기 스레드가 SQL을 쓰기 전에 실패로 처리한다."""
         self._failures.append(kind)
 
     async def save(self, record: Record) -> bool:
@@ -132,25 +140,26 @@ class SqliteRecordStore:
         return rec.saved
 
     async def retry_now(self) -> tuple[int, int]:
-        """미저장 기록을 지금 다시 저장해 본다. (저장한 수, 남은 수)."""
+        """미저장 기록·세션을 지금 다시 저장해 본다. (저장한 기록 수, 남은 기록 수)."""
         async with self._retry_lock:
+            sessions = [self._attempt_session(info) for info in list(self._unsaved_sessions.values())]
             pending = list(self._unsaved.values())
             if not pending:
+                if sessions:
+                    await asyncio.wait(sessions)
                 return 0, 0
             before = len(self._unsaved)
-            await asyncio.wait([self._attempt(rec, report=False) for rec in pending])
+            await asyncio.wait(sessions + [self._attempt(rec, report=False) for rec in pending])
             saved = sum(rec.saved for rec in pending)
             self._report(before, failed=saved < len(pending))
             return saved, len(self._unsaved)
 
     def save_session(self, session_id: str, previous_session_id: str | None, started_at: str) -> asyncio.Future:
-        """세션 표에 남긴다. 바로 쓰기 큐에 넣으므로(그 세션 기록보다 먼저) 기다리지 않아도 된다. 실패는 로그로 남긴다."""
+        """세션 표에 남긴다. 바로 쓰기 큐에 넣으므로(그 세션 기록보다 먼저) 기다리지 않아도 된다. 실패하면 기록처럼 재시도한다."""
         info = {"session_id": session_id, "previous_session_id": previous_session_id, "started_at": started_at}
         self._session_info[session_id] = info
         self._sessions.setdefault(session_id, [])
-        future = self._enqueue(partial(_insert_session, info=info))
-        future.add_done_callback(partial(_log_failure, f"세션 저장 실패: {session_id}"))
-        return future
+        return self._attempt_session(info)
 
     async def session_records(self, session_id: str) -> list[Record] | None:
         """세션의 기록. 이 프로세스의 세션이면 메모리(발생 순서), 아니면 SQLite에서 시각순. 없는 세션이면 None."""
@@ -210,15 +219,33 @@ class SqliteRecordStore:
         else:
             log.error("기록 저장 실패: %s", rec.record_id, exc_info=error)
             self._unsaved[key] = rec
-            if not self._closed and (self._retry_task is None or self._retry_task.done()):
-                self._retry_task = self._loop.create_task(self._retry_loop())
+            self._start_retry()
         if report:
             self._report(before, failed=error is not None)
 
+    def _attempt_session(self, info: dict) -> asyncio.Future:
+        future = self._enqueue(partial(_insert_session, info=info, fail=self._take_failure("session")))
+        future.add_done_callback(partial(self._settle_session, info))
+        return future
+
+    def _settle_session(self, info: dict, future: asyncio.Future) -> None:
+        if future.cancelled():
+            return
+        if future.exception() is None:
+            self._unsaved_sessions.pop(info["session_id"], None)
+        else:
+            log.error("세션 저장 실패: %s", info["session_id"], exc_info=future.exception())
+            self._unsaved_sessions[info["session_id"]] = info
+            self._start_retry()
+
+    def _start_retry(self) -> None:
+        if not self._closing and (self._retry_task is None or self._retry_task.done()):
+            self._retry_task = self._loop.create_task(self._retry_loop())
+
     async def _retry_loop(self) -> None:
-        """미저장 기록이 없어질 때까지 엔진 시계로 기다렸다 다시 저장한다. 기다리는 동안 save를 붙잡지 않는다."""
+        """미저장 기록·세션이 없어질 때까지 엔진 시계로 기다렸다 다시 저장한다. 기다리는 동안 save를 붙잡지 않는다."""
         delay = self._retry_base_s
-        while self._unsaved:
+        while self._unsaved or self._unsaved_sessions:
             await self._clock.sleep_until(self._clock.now() + delay)
             await self.retry_now()
             delay = min(delay * 2, self._retry_max_s)
@@ -246,8 +273,11 @@ class SqliteRecordStore:
 
 
 def _connect(path: Path) -> sqlite3.Connection:
+    """WAL과 synchronous=FULL: 키트 전원이 갑자기 끊겨도 저장했다고 답한 쓰기는 남게 한다."""
     conn = sqlite3.connect(path)
     try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=FULL")
         conn.executescript(_SCHEMA)
     except Exception:
         conn.close()
@@ -264,11 +294,6 @@ def _resolve(future: asyncio.Future, result: Any, error: Exception | None) -> No
         future.set_exception(error)
 
 
-def _log_failure(what: str, future: asyncio.Future) -> None:
-    if not future.cancelled() and future.exception() is not None:
-        log.error(what, exc_info=future.exception())
-
-
 def _insert_record(conn: sqlite3.Connection, row: tuple, fail: bool) -> None:
     if fail:
         raise RuntimeError("저장 실패 주입(시험)")
@@ -277,7 +302,9 @@ def _insert_record(conn: sqlite3.Connection, row: tuple, fail: bool) -> None:
                      row)
 
 
-def _insert_session(conn: sqlite3.Connection, info: dict) -> None:
+def _insert_session(conn: sqlite3.Connection, info: dict, fail: bool) -> None:
+    if fail:
+        raise RuntimeError("저장 실패 주입(시험)")
     with conn:
         conn.execute("INSERT INTO sessions (session_id, previous_session_id, started_at) VALUES (?, ?, ?)",
                      (info["session_id"], info["previous_session_id"], info["started_at"]))

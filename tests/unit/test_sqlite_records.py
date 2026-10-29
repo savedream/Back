@@ -36,6 +36,10 @@ class Rig:
         with sqlite3.connect(self.path) as conn:
             return conn.execute("SELECT record_id, session_id, kind, saved FROM records ORDER BY rowid").fetchall()
 
+    def sessions(self) -> list[str]:
+        with sqlite3.connect(self.path) as conn:
+            return [s for (s,) in conn.execute("SELECT session_id FROM sessions ORDER BY rowid")]
+
 
 async def until(check, timeout: float = 2.0) -> None:
     """쓰기 스레드 결과가 이벤트 루프로 넘어올 때까지 기다린다."""
@@ -170,3 +174,32 @@ async def test_writes_run_on_writer_thread_without_blocking_loop(rig):
     assert not job.done() and threads[0] != threading.get_ident()
     release.set()
     assert await job == 0
+
+
+async def test_connection_uses_wal_and_full_sync(rig):
+    mode, sync = await rig.store.run(lambda c: (c.execute("PRAGMA journal_mode").fetchone()[0],
+                                                c.execute("PRAGMA synchronous").fetchone()[0]))
+    assert (mode, sync) == ("wal", 2)  # 2: FULL
+
+
+async def test_failed_session_row_is_retried(rig):
+    rig.store.fail_next_save("session")
+    with pytest.raises(RuntimeError):
+        await rig.store.save_session("s_1", None, "2026-10-13T14:00:00+09:00")
+    assert rig.sessions() == []
+    await asyncio.sleep(0)  # 재시도 태스크가 엔진 시계로 기다리기 시작한다
+    rig.clock.advance(1)  # 기록과 같은 재시도 간격
+    await until(lambda: rig.sessions() == ["s_1"])
+    assert rig.events() == []  # 세션 행은 미저장 기록 건수에 넣지 않는다
+
+
+async def test_close_tries_unsaved_once_more(tmp_path):
+    r = Rig(tmp_path / "records.db")
+    r.store.start()
+    r.store.fail_next_save("session")
+    r.store.fail_next_save()
+    await asyncio.gather(r.store.save_session("s_1", None, "2026-10-13T14:00:00+09:00"), return_exceptions=True)
+    assert await r.store.save(_record(1)) is False
+    await r.store.close()  # 재시도 간격(1초)이 지나지 않았어도 닫기 전에 한 번 더 저장해 본다
+    assert r.rows() == [("r_0001", "s_1", "user_report", 1)] and r.sessions() == ["s_1"]
+    assert r.store.unsaved() == [] and r.store.records[0].saved is True
