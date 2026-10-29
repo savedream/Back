@@ -113,9 +113,17 @@ def _switch_by_priority(run: Run, prompt: PendingPrompt) -> None:
     new = run.db.manuals_by_id[prompt.target_manual_id]
     current = run.db.manuals_by_id[run.s.active_manual_id]
     if new["priority"] < current["priority"]:
-        do_switch(run, new["situation_code"])
+        _switch_confirmed(run, prompt)
     else:
         resume_after_prompt(run, prompt)
+
+
+def _switch_confirmed(run: Run, prompt: PendingPrompt) -> None:
+    """확인 질문을 거쳐 전환한다. 확인을 건 입력의 관찰값도 새 routing_no로 다시 매긴다(공통 데이터 형식 ObservedValue)."""
+    said = prompt.deferred_branch.observation if prompt.deferred_branch else None
+    if said is not None:
+        run.input_obs_keys.extend(k for k, v in said.model_dump().items() if v != -1)
+    do_switch(run, run.db.manuals_by_id[prompt.target_manual_id]["situation_code"])
 
 
 def answer_prompt(run: Run, answer: int) -> None:
@@ -124,7 +132,7 @@ def answer_prompt(run: Run, answer: int) -> None:
     clear_prompt(run)
     if prompt.type == "switch_confirm":
         if answer == 1:
-            do_switch(run, run.db.manuals_by_id[prompt.target_manual_id]["situation_code"])
+            _switch_confirmed(run, prompt)
         elif answer == 2:
             # 하던 안내 계속. 이번 관찰값은 이미 반영됨, 상황 설명 처리 5번(현재 질문 분기)부터 이어서
             if not _continue_deferred(run, prompt.deferred_branch):

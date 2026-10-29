@@ -131,6 +131,17 @@ def test_s6_switch_confirm_yes(kit):
                                  ("step", "EM06-02")]
 
 
+def test_switch_yes_renumbers_values_of_the_asking_input(kit):
+    kit.model.add("다리가 부러진 것 같은데 피는 안 나요",
+                  "<maum_0>(situation=3, conscious=-1, breathing=-1, bleeding=0, movement=-1, scene_danger=-1)<maum_end>")
+    kit.say("팔에 화상을 입었어요")
+    assert ids(kit.say("다리가 부러진 것 같은데 피는 안 나요")) == [("template", "T_SWITCH_ASK")]
+    out = ids(kit.say("네"))
+    assert out[:2] == [("template", "T_SWITCH"), ("intro", "EM-03")]
+    assert ("step", "EM03-01") not in out  # 출혈 없음은 이미 들었으니 다시 묻지 않는다
+    assert kit.state.observation["bleeding"].routing_no == kit.state.routing_no
+
+
 def test_s7_cardiac_switch_without_confirm(kit):
     at_s1b(kit)
     assert ids(kit.say("심장이 멈춘 것 같아요")) == [("template", "T_SWITCH"), ("intro", "EM-01"), ("step", "EM01-01")]
