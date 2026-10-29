@@ -164,3 +164,13 @@ async def test_tts_failure_is_text_only(rig):
 
 async def test_empty_result_is_done_at_once(rig):
     assert rig.seq.submit(result()).done.done()
+
+
+async def test_unexpected_error_still_reports_finished(rig, monkeypatch):
+    def broken_publish(type, turn_id, data):
+        raise RuntimeError("시험용 오류")
+
+    monkeypatch.setattr(rig.bus, "publish", broken_publish)
+    rig.seq.submit(result(say(1)))
+    await until_idle(rig.seq)
+    assert rig.finished() == [("x_1", "text_only")]

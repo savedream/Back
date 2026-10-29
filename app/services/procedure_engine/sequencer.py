@@ -123,7 +123,14 @@ class Sequencer:
     async def _execute(self, item: _Item) -> None:
         action = item.action
         if isinstance(action, SayAction):
-            result = "cut" if item.cut else await self._say(item)
+            result = "cut"
+            if not item.cut:
+                try:
+                    result = await self._say(item)
+                except Exception:
+                    # 낭독 끝 되먹임이 빠지면 엔진이 무응답 타이머를 다시 걸지 못하므로 어떤 경우에도 돌려준다
+                    log.exception("낭독 실패, 글로만 낸 것으로 처리: %s", action.utterance.text)
+                    result = "text_only"
             await self._feed(PlaybackInput(action_id=action.action_id, event="finished", result=result))
         elif isinstance(action, DeviceAction):
             self._spawn(self._device(action))
