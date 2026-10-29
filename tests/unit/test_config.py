@@ -19,7 +19,7 @@ def test_defaults():
     assert s.prompt_prefix_im_start is False
     assert s.manual_db_path.name == "manual_db.json"
     assert s.manual_db_path.exists()
-    assert all([s.fake_model, s.fake_devices, s.fake_audio, s.fake_gps])
+    assert all([s.fake_model, s.fake_devices, s.fake_audio, s.fake_gps, s.fake_auto_ready])
     assert s.enable_docs is False
 
 

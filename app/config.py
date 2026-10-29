@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     fake_devices: bool = True
     fake_audio: bool = True
     fake_gps: bool = True
+    # 가짜 모드에서 서버를 켜면 VAD·STT·TTS·LLM 적재와 예열을 바로 끝난 것으로 표시한다
+    fake_auto_ready: bool = True
 
 
 @lru_cache

@@ -40,7 +40,7 @@ def _test_router() -> APIRouter:
 
 @pytest.fixture
 def app():
-    a = create_app(Settings(_env_file=None))
+    a = create_app(Settings(_env_file=None, fake_auto_ready=False))
     a.include_router(_test_router(), prefix="/api")
     return a
 
