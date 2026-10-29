@@ -40,8 +40,10 @@ KST = timezone(timedelta(hours=9))
 
 
 class FakeClock:
-    def __init__(self, start_wall: datetime | None = None):
-        self._now = 0.0
+    """start_now: 시작할 때의 단조 시각(같은 부팅에서 다시 띄운 프로세스처럼 이어 가는 시험용). 그때 벽시계가 start_wall."""
+
+    def __init__(self, start_wall: datetime | None = None, start_now: float = 0.0):
+        self._now = self._start_now = start_now
         self._start_wall = start_wall or datetime(2026, 10, 13, 14, 0, 0, tzinfo=KST)
         self._changed = asyncio.Event()
 
@@ -49,7 +51,7 @@ class FakeClock:
         return self._now
 
     def wall(self) -> datetime:
-        return self._start_wall + timedelta(seconds=self._now)
+        return self._start_wall + timedelta(seconds=self._now - self._start_now)
 
     def advance(self, seconds: float) -> None:
         self._now += seconds

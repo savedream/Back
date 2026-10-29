@@ -70,10 +70,13 @@ def boot_file(tmp_path, boot_id: str | None):
     return path
 
 
-def relaunch(tmp_path, after_s: float, boot_id: str | None = "boot-1", resume: bool = True) -> Kit:
-    """같은 기록 DB로 앱을 다시 띄운다. 벽시계는 첫 실행을 시작한 뒤 after_s초, 엔진 시계는 0부터."""
-    return Kit(FakeClock(start_wall=START + timedelta(seconds=after_s)), records_db_path=tmp_path / "records.db",
-               boot_id_path=boot_file(tmp_path, boot_id), resume_from_snapshot=resume)
+def relaunch(tmp_path, after_s: float, boot_id: str | None = "boot-1", resume: bool = True,
+             wall_jump_s: float = 0) -> Kit:
+    """같은 기록 DB로 앱을 다시 띄운다. 같은 부팅처럼 엔진(단조) 시계는 첫 실행을 시작한 뒤 after_s초에서 이어 가고,
+    벽시계는 거기에 wall_jump_s(GPS 동기화로 바뀐 만큼)를 더한다."""
+    clock = FakeClock(start_wall=START + timedelta(seconds=after_s + wall_jump_s), start_now=after_s)
+    return Kit(clock, records_db_path=tmp_path / "records.db", boot_id_path=boot_file(tmp_path, boot_id),
+               resume_from_snapshot=resume)
 
 
 async def cpr_then_power_off(tmp_path, boot_id: str | None = "boot-1") -> tuple[SessionState, list[int]]:
@@ -104,6 +107,17 @@ async def test_same_boot_resumes_from_snapshot(tmp_path):
         assert sessions == [(before.session_id,)]  # 이어 가는 세션은 새 행을 만들지 않는다
         assert await kit.advance(remaining - 10 - 1) == []
         assert ids(await kit.advance(1)) == [("step", "EM01-10"), ("step", "EM01-11")]
+
+
+@pytest.mark.parametrize("wall_jump_s", [3600, -3600])
+async def test_downtime_is_measured_by_monotonic_clock(tmp_path, wall_jump_s):
+    before, _ = await cpr_then_power_off(tmp_path)
+    async with relaunch(tmp_path, 30 + 10, wall_jump_s=wall_jump_s) as kit:  # 벽시계만 GPS 동기화로 크게 바뀜
+        s = kit.state
+        assert s.session_id == before.session_id and s.step_id == "EM01-15"
+        assert s.alerts[0].deadline == before.alerts[0].deadline == kit.clock.now() + 80  # 단조 시계로 10초 끊김
+        assert s.timer.elapsed_s(kit.clock.now()) == 40
+        assert ids(await kit.advance(80)) == [("step", "EM01-10"), ("step", "EM01-11")]
 
 
 async def test_resume_before_guidance_says_welcome(tmp_path):

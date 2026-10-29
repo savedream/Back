@@ -53,7 +53,8 @@ class EngineService:
         ctx = self._ctx()
         result = None
         if snapshot is not None:
-            downtime = max(0.0, ctx.wall.timestamp() - snapshot.saved_wall)  # 끊긴 시간(벽시계 차이)
+            # 끊긴 시간은 단조 시계 차이로 잰다. 같은 부팅이면 단조 시계가 이어지고, 벽시계는 GPS 동기화로 바뀔 수 있다
+            downtime = max(0.0, ctx.now - snapshot.saved_now)
             try:
                 result = resume_session(snapshot.state, ctx, snapshot.saved_now, downtime)
             except Exception:
