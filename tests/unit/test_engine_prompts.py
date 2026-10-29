@@ -2,7 +2,9 @@
 import pytest
 
 from app.schemas.device import DeviceCommand
-from app.services.procedure_engine.inputs import DeviceButtonInput, DeviceResultInput, RepeatButtonInput
+from app.services.procedure_engine.inputs import (
+    DeviceButtonInput, DeviceResultInput, LocationButtonInput, RepeatButtonInput,
+)
 from tests.unit.engine_kit import EngineKit, ids
 
 
@@ -112,3 +114,34 @@ def test_slow_repeat_of_prompt(kit):
     kit.say("팔에 화상을 입었어요")
     out = kit.say("천천히 다시")
     assert ids(out) == [("template", "T_SWITCH_ASK")] and out[0].speed == 1
+
+
+def location_button(kit: EngineKit) -> list:
+    start = len(kit.spoken)
+    kit.feed(LocationButtonInput(turn_id="t_btn"))
+    return ids(kit.spoken[start:])
+
+
+def test_location_button_keeps_switch_confirm(kit):
+    kit.say("팔에 화상을 입었어요")
+    assert location_button(kit) == [("template", "T_OOS_2"), ("template", "T_GPS_OK"), ("template", "T_SWITCH_ASK")]
+    assert kit.state.pending_prompt.type == "switch_confirm"
+
+
+def test_location_button_cancels_timer_reset(kit):
+    kit.say("타이머 시작해 줘")
+    kit.say("타이머 초기화해 줘")
+    assert location_button(kit) == [("template", "T_OOS_2"), ("template", "T_GPS_OK"), ("step", "EM03-04")]
+    assert kit.state.pending_prompt is None and kit.state.timer.status == "running"
+
+
+def test_progress_phrase_cancels_timer_reset_in_wait():
+    k = at_compression_recovery_check()
+    k.say("아니요")  # 아직 회복 안 됨 → 압박 계속(EM01-15 대기)
+    assert k.state.step_id == "EM01-15"
+    k.say("타이머 초기화해 줘")
+    mark = len(k.events)
+    assert ids(k.say("다음")) == [("template", "T_WAITING")]
+    assert k.state.pending_prompt is None and k.state.timer.status == "running"
+    results = [e.data for e in k.events[mark:] if e.type == "turn.result"]
+    assert results == [{"function_call": None, "error_code": None}]  # 진행 표현 턴도 해석 결과를 알린다

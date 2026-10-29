@@ -135,6 +135,7 @@ def handle_tick(run: Run) -> None:
         step = current_step(run)
         if step is not None and step["kind"] == "wait" and step["next"]:
             s.wait_timeouts[step["step_id"]] = s.wait_timeouts.get(step["step_id"], 0) + 1
+            clear_prompt(run)  # 위치가 바뀌면 걸려 있던 확인 질문은 취소한다
             goto(run, step["next"])
     if s.gps_retry is not None and s.gps_retry.give_up_at <= now:
         s.gps_retry = None  # 3분 동안 못 잡으면 조용히 그만둔다

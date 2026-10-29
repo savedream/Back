@@ -12,7 +12,7 @@ from app.services.procedure_engine.flow import (
 )
 from app.services.procedure_engine.inputs import FunctionCallInput, ModelErrorInput, ProgressPhraseInput
 from app.services.procedure_engine.interrupts import (
-    answer_prompt, clear_prompt, reask_prompt, switch, try_i1, try_i2,
+    answer_prompt, clear_prompt, reask, reask_prompt, switch, try_i1, try_i2,
 )
 
 
@@ -289,16 +289,29 @@ def is_progress_phrase(db: ManualDB, state: SessionState, normalized: str) -> bo
 def handle_progress_phrase(run: Run, inp: ProgressPhraseInput) -> None:
     run.s.speech_active = False
     _record_user(run, inp, None)
+    run.event("turn.result", {"function_call": None, "error_code": None})
+    prompt = run.s.pending_prompt
+    if prompt is not None and prompt.type != "switch_confirm":
+        clear_prompt(run)  # 그 확인 질문의 답이 아닌 입력이면 취소하고 이 입력을 처리한다(6-7)
     step = current_step(run)
     if step is None or step["kind"] != "wait":
-        ask_again(run)
+        reask(run)
     elif step["next"]:
+        clear_prompt(run)  # 위치가 바뀌면 걸려 있던 확인 질문은 취소한다
         run.s.wait_deadline = None
         goto(run, step["next"])
     else:
         run.say_template("T_WAITING")  # 압박 2분·관찰 3분·조난 30분은 건너뛰지 않음
+        if run.s.pending_prompt is not None:
+            reask_prompt(run)
 
 
 def handle_location_button(run: Run) -> None:
-    """메인 화면의 119 신고 버튼: 기타 type 2와 같은 처리."""
+    """메인 화면의 119 신고 버튼: 기타 type 2와 같은 처리. 확인 질문도 음성 입력과 같은 규칙(6-7)."""
+    prompt = run.s.pending_prompt
+    if prompt is not None and prompt.type == "switch_confirm":
+        _out_of_scope(run, 2, reask=False)
+        reask_prompt(run)
+        return
+    clear_prompt(run)
     _out_of_scope(run, 2)
