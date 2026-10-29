@@ -7,12 +7,12 @@ from app.fakes.fake_devices import FakeDevices
 from app.fakes.fake_gps import FakeGps
 from app.fakes.fake_model import FakeModel
 from app.fakes.fake_speaker import FakeSpeaker
+from app.schemas.record import Record
 from app.services.events import EventBus
 from app.services.manual_db import ManualDB
 from app.services.procedure_engine.clock import Clock
 from app.services.procedure_engine.inputs import LocationUpdateInput
 from app.services.procedure_engine.service import EngineService
-from app.schemas.record import Record
 from app.services.records import Snapshot, SqliteRecordStore
 
 _FAKE_FLAGS = ("fake_model", "fake_devices", "fake_audio", "fake_gps")
