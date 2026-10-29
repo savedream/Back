@@ -22,7 +22,7 @@ def health(request: Request):
         HealthOut(
             ready=request.app.state.readiness.ready,
             version=settings.app_version,
-            manual_db=settings.manual_db_version,
+            manual_db=request.app.state.manual_db.version,
             model=settings.model_version,
         )
     )
