@@ -84,3 +84,11 @@ def test_leaving_question_for_wait_clears_no_speech(kit):
     assert kit.state.no_speech.deadline is not None
     kit.say("아니요")
     assert kit.state.step_id == "EM01-15" and kit.state.no_speech.deadline is None
+
+
+def test_which_on_timeout_asks_original_question_again(kit):
+    at_s1b(kit)
+    kit.model.add("켜 줘", "<maum_4>(object=-1, type=1)<maum_end>")
+    assert ids(kit.say("켜 줘")) == [("template", "T_WHICH_ON")]
+    assert ids(kit.advance(15)) == [("step", "EM03-04")]
+    assert kit.state.pending_prompt is None

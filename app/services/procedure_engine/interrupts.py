@@ -144,7 +144,8 @@ def prompt_timed_out(run: Run) -> None:
     elif prompt.type == "timer_reset":
         run.say_template("T_DEV_TIMER_KEEP")
         resume_after_prompt(run, prompt)
-    # which_on·which_off는 말없이 취소
+    else:
+        resume_after_prompt(run, prompt)  # which_on·which_off는 말없이 취소하고 원래 질문으로
 
 
 def _continue_deferred(run: Run, fc: FunctionCall | None) -> bool:
