@@ -105,6 +105,7 @@ def handle_tick(run: Run) -> None:
                 clear_prompt(run)  # 위치가 바뀌면 걸려 있던 확인 질문은 취소한다(타이머 초기화라면 타이머는 그대로)
                 run.preempt()
                 goto(run, alert.on_timeout)
+                break  # 입력 하나에 단계 이동은 한 번. 같이 끝난 알림은 다음 Tick에서 처리한다
             else:
                 step = run.db.steps_by_id[alert.step_id]
                 if step["alert_tts"]:

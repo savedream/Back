@@ -2,7 +2,7 @@
 import pytest
 
 from app.common.error_code import ErrorCode
-from app.services.procedure_engine.inputs import ModelErrorInput
+from app.services.procedure_engine.inputs import ModelErrorInput, TickInput
 from tests.unit.engine_kit import EngineKit, ids
 
 NO_SPEECH_AGAIN = [("template", "T_NO_SPEECH"), ("step", "EM03-04")]
@@ -132,3 +132,14 @@ def test_barge_in_continues_from_unread_step_after_user_turn(kit):
     assert cut == [("EM03-05", "cut"), ("EM03-06", "cut"), ("EM03-07", "cut")]
     assert ids(kit.say("어 그게 아니고")) == [("template", "T_RETRY"), ("step", "EM03-05"), ("step", "EM03-06"),
                                              ("step", "EM03-07")]
+
+
+def test_one_move_per_tick_when_two_alerts_end_together(kit):
+    at_s5b(kit)
+    first = kit.state.alerts[0]
+    kit.state.alerts.append(first.model_copy(update={"alert_id": "a_99", "step_id": "MON-07", "on_timeout": "MON-02"}))
+    kit.clock.advance(120)
+    kit.feed(TickInput())
+    assert kit.state.step_id == "EM01-11" and [a.alert_id for a in kit.state.alerts] == ["a_99"]
+    kit.feed(TickInput())
+    assert kit.state.step_id == "MON-02" and kit.state.alerts == []
