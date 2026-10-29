@@ -5,6 +5,7 @@ from datetime import timedelta
 from app.config import BACKEND_DIR
 from app.fakes.fake_model import FakeModel
 from app.schemas.device import LastKnown, Location
+from app.schemas.session import SessionState
 from app.schemas.utterance import Utterance
 from app.services.manual_db import load_manual_db
 from app.services.normalizer import normalize
@@ -65,18 +66,7 @@ class EngineKit:
 
     def say(self, text: str) -> list[Utterance]:
         start = len(self.spoken)
-        n = normalize(text).text
-        base = {"turn_id": f"t_{len(self.records):04d}", "epoch": self.state.epoch, "step_id": self.state.step_id,
-                "text": text, "normalized": n}
-        step = DB.steps_by_id.get(self.state.step_id) if self.state.step_id else None
-        if step is not None and step["kind"] == "wait" and n in PROGRESS_PHRASES:
-            self.feed(ProgressPhraseInput(**base))
-        else:
-            raw = self.model.table.get(n, "<maum_9>")
-            try:
-                self.feed(FunctionCallInput(**base, function_call=parse(raw)))
-            except ModelOutputError as e:
-                self.feed(ModelErrorInput(**base, error_code=e.code))
+        self.feed(user_turn(self.state, text, self.model, f"t_{len(self.records):04d}"))
         return self.spoken[start:]
 
     def advance(self, seconds: float) -> list[Utterance]:
@@ -85,6 +75,20 @@ class EngineKit:
         while (d := next_deadline(self.state)) is not None and d <= self.clock.now():
             self.feed(TickInput())
         return self.spoken[start:]
+
+
+def user_turn(state: SessionState, text: str, model: FakeModel, turn_id: str):
+    """문장 하나를 엔진 입력으로: 대기 단계의 진행 표현이면 모델을 건너뛰고, 아니면 가짜 모델 표 → 파서."""
+    n = normalize(text).text
+    base = {"turn_id": turn_id, "epoch": state.epoch, "step_id": state.step_id, "text": text, "normalized": n}
+    step = DB.steps_by_id.get(state.step_id) if state.step_id else None
+    if step is not None and step["kind"] == "wait" and n in PROGRESS_PHRASES:
+        return ProgressPhraseInput(**base)
+    raw = model.table.get(n, "<maum_9>")
+    try:
+        return FunctionCallInput(**base, function_call=parse(raw))
+    except ModelOutputError as e:
+        return ModelErrorInput(**base, error_code=e.code)
 
 
 def ids(utterances: list[Utterance]) -> list[tuple[str, str]]:
@@ -106,4 +110,4 @@ def assert_from_db(u: Utterance) -> None:
         assert not re.search(r"[0-9A-Za-z/]", u.text)
 
 
-__all__ = ["EngineKit", "ids", "assert_from_db", "FIX", "NO_FIX_LAST", "timedelta"]
+__all__ = ["EngineKit", "user_turn", "ids", "assert_from_db", "FIX", "NO_FIX_LAST", "timedelta"]
