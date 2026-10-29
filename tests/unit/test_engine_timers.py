@@ -92,3 +92,29 @@ def test_which_on_timeout_asks_original_question_again(kit):
     assert ids(kit.say("켜 줘")) == [("template", "T_WHICH_ON")]
     assert ids(kit.advance(15)) == [("step", "EM03-04")]
     assert kit.state.pending_prompt is None
+
+
+def at_s5b(kit: EngineKit) -> EngineKit:
+    kit.say("사람이 쓰러졌는데 숨을 안 쉬어")
+    kit.say("아니요 대답 없어요")
+    kit.say("아니요")
+    return kit
+
+
+def test_alert_move_cancels_pending_timer_reset(kit):
+    at_s5b(kit)
+    kit.advance(110)
+    assert ids(kit.say("타이머 초기화해 줘")) == [("template", "T_TIMER_RESET_ASK")]
+    assert ids(kit.advance(10)) == [("step", "EM01-10"), ("step", "EM01-11")]
+    assert kit.state.pending_prompt is None and kit.state.timer.status == "running"
+    out = ids(kit.say("네"))  # 자동심장충격기 질문의 답으로 쓴다
+    assert out[0] == ("step", "AED-01") and ("template", "T_DEV_TIMER_RESET") not in out  # EM01-12 → COM-AED
+    assert kit.state.timer.status == "running"
+
+
+def test_alert_move_keeps_listening_after_prompt_cancel(kit):
+    at_s5b(kit)
+    kit.advance(110)
+    kit.say("타이머 초기화해 줘")
+    kit.advance(10)
+    assert ids(kit.advance(15)) == [("template", "T_NO_SPEECH"), ("step", "EM01-11")]

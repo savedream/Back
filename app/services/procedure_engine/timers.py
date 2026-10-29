@@ -7,7 +7,7 @@ from app.schemas.session import SessionState
 from app.services.procedure_engine import engine_constants as C
 from app.services.procedure_engine.context import Run
 from app.services.procedure_engine.flow import ask_again, current_step, goto, start_alert
-from app.services.procedure_engine.interrupts import finish_timer_reset, prompt_timed_out
+from app.services.procedure_engine.interrupts import clear_prompt, finish_timer_reset, prompt_timed_out
 from app.services.procedure_engine.templates import read_coordinate
 
 
@@ -102,6 +102,7 @@ def handle_tick(run: Run) -> None:
             s.alerts.remove(alert)
             run.event("alert.ended", {"alert_id": alert.alert_id, "reason": "timeout"})
             if alert.on_timeout:
+                clear_prompt(run)  # 위치가 바뀌면 걸려 있던 확인 질문은 취소한다(타이머 초기화라면 타이머는 그대로)
                 run.preempt()
                 goto(run, alert.on_timeout)
             else:
