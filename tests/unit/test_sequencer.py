@@ -174,3 +174,15 @@ async def test_unexpected_error_still_reports_finished(rig, monkeypatch):
     rig.seq.submit(result(say(1)))
     await until_idle(rig.seq)
     assert rig.finished() == [("x_1", "text_only")]
+
+
+async def test_first_sound_marks_batch_once(rig):
+    batch = rig.seq.submit(result(say(1), say(2)))
+    await until_idle(rig.seq)
+    assert batch.first_sound.done()
+
+
+async def test_silent_batch_has_no_sound(rig):
+    batch = rig.seq.submit(result(say(1)), speak=False)
+    await batch.done
+    assert not batch.first_sound.done()

@@ -5,6 +5,7 @@ replace 결과가 오면 남은 say는 읽지 않고 끊김(cut)으로 돌려주
 """
 import asyncio
 import logging
+import time
 from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -28,9 +29,11 @@ class Batch:
     """엔진 결과 하나의 actions. 모두 실행하면(say는 낭독이 끝나면) done이 풀린다."""
 
     def __init__(self, turn_id: str | None, size: int):
+        loop = asyncio.get_running_loop()
         self.turn_id = turn_id
         self.remaining = size
-        self.done: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        self.done: asyncio.Future[None] = loop.create_future()
+        self.first_sound: asyncio.Future[float] = loop.create_future()  # 첫 문장 소리가 나간 시각(perf_counter)
         if size == 0:
             self.done.set_result(None)
 
@@ -149,6 +152,8 @@ class Sequencer:
         if item.silent:
             return "done"
         task = self._playing = asyncio.create_task(self._speaker.speak(u, self._state().volume))
+        if not item.batch.first_sound.done():
+            item.batch.first_sound.set_result(time.perf_counter())  # turn.latency 기준
         try:
             await asyncio.wait({task})
         except asyncio.CancelledError:
