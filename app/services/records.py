@@ -307,10 +307,11 @@ class SqliteRecordStore:
     def _settle_session(self, info: dict, future: asyncio.Future) -> None:
         if future.cancelled():
             return
-        if future.exception() is None:
+        error = future.exception()
+        if error is None:
             self._unsaved_sessions.pop(info["session_id"], None)
         else:
-            log.error("세션 저장 실패: %s", info["session_id"], exc_info=future.exception())
+            log.error("세션 저장 실패: %s", info["session_id"], exc_info=error)
             self._unsaved_sessions[info["session_id"]] = info
             self._start_retry()
 
@@ -329,8 +330,9 @@ class SqliteRecordStore:
 
     def _snapshot_written(self, future: asyncio.Future) -> None:
         """쓰는 동안 새 스냅샷이 들어왔으면 이어서 쓴다. 실패하면 로그만 남기고 다음 상태 변화 때 다시 쓴다."""
-        if future.exception() is not None:
-            log.error("상태 스냅샷 저장 실패", exc_info=future.exception())
+        error = future.exception()
+        if error is not None:
+            log.error("상태 스냅샷 저장 실패", exc_info=error)
         elif self._snapshot is not None and not self._closed:
             self._queue_snapshot()
 
