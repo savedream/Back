@@ -1,4 +1,4 @@
-"""화면 이벤트 발행 (명세서 GET /api/events). 버스는 seq를 매기고 구독자별 큐로 나눠 준다. SSE 전송은 세션·기록 덩어리에서 붙인다."""
+"""화면 이벤트 발행 (명세서 GET /api/events). 버스는 seq를 매기고 구독자별 큐로 나눠 준다. SSE 전송은 app/api/events.py."""
 import asyncio
 from typing import Protocol
 

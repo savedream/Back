@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI
 
-from app.api import system, utterances
+from app.api import events, system, utterances
 from app.common.handlers import install_error_handlers
 from app.config import Settings, get_settings
 from app.core.parts import build_parts
@@ -36,6 +36,7 @@ def create_app(settings: Settings | None = None, *, clock: Clock | None = None) 
         if readiness.ready:
             await parts.engine.start()
         yield
+        parts.events.close_all()  # 열린 SSE 스트림을 먼저 닫는다(서버 정상 종료를 붙잡지 않게)
         await parts.engine.stop()
         await parts.records.close()  # 엔진을 멈춘 뒤 남은 기록 쓰기를 마친다
 
@@ -54,6 +55,7 @@ def create_app(settings: Settings | None = None, *, clock: Clock | None = None) 
     # 인증 없음: 화면은 키트가 만든 전용 Wi-Fi(AP)에서만 접속하고, 접근은 Wi-Fi 비밀번호로 막는다
     api = APIRouter(prefix="/api")
     api.include_router(system.router)
+    api.include_router(events.router)
     api.include_router(utterances.router)
     app.include_router(api)
     return app

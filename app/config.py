@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     post_tts_guard_ms: int = 300
     device_timeout_s: float = 2
 
+    # SSE(GET /api/events)에서 이벤트가 없을 때 ping 주석을 보내는 간격(초)
+    sse_ping_s: float = 15
+
     # 기록 저장 재시도 간격(엔진 시계 기준, 시작값에서 두 배씩, 최대값까지). TODO(미정: 임시값)
     record_retry_base_s: float = 1
     record_retry_max_s: float = 60
