@@ -2,7 +2,7 @@
 import pytest
 
 from app.schemas.device import DeviceCommand
-from app.services.procedure_engine.inputs import DeviceButtonInput, DeviceResultInput
+from app.services.procedure_engine.inputs import DeviceButtonInput, DeviceResultInput, RepeatButtonInput
 from tests.unit.engine_kit import EngineKit, ids
 
 
@@ -77,3 +77,38 @@ def test_late_on_response_does_not_show_on_after_off_request(kit):
     assert kit.state.devices["metronome"].status == "pending"  # 끄기 응답을 기다리는 중
     kit.feed(DeviceResultInput(action_id=off.action_id, object=2, status="success"))
     assert kit.state.devices["metronome"].status == "off"
+
+
+def at_compression_recovery_check() -> EngineKit:
+    k = EngineKit()
+    k.say("사람이 쓰러졌는데 숨을 안 쉬어")
+    k.say("아니요 대답 없어요")
+    k.say("아니요")
+    k.say("숨 쉬어요")  # 압박 중 회복 신호 → EM01-13
+    assert k.state.step_id == "EM01-13"
+    return k
+
+
+@pytest.mark.parametrize("text", ["다시 말해 줘", "처음부터 다시", "다시"])
+def test_repeat_during_timer_reset_reads_prompt_again(text):
+    k = at_compression_recovery_check()
+    k.say("타이머 초기화해 줘")
+    assert ids(k.say(text)) == [("template", "T_TIMER_RESET_ASK")]
+    assert k.state.pending_prompt.type == "timer_reset"
+    out = ids(k.say("네"))  # 확인 질문의 답: 압박을 멈추지 않고 타이머만 초기화한 뒤 원래 질문을 다시 묻는다
+    assert out == [("template", "T_DEV_TIMER_RESET"), ("step", "EM01-13")]
+    assert k.state.step_id == "EM01-13" and "cpr" in k.state.flags and k.state.timer.status == "idle"
+
+
+def test_repeat_button_during_switch_confirm_reads_it_once(kit):
+    kit.say("팔에 화상을 입었어요")
+    start = len(kit.spoken)
+    kit.feed(RepeatButtonInput(turn_id="t_btn"))
+    assert ids(kit.spoken[start:]) == [("template", "T_SWITCH_ASK")]  # 원래 질문이 아니라 확인 질문을 한 번
+    assert ids(kit.say("아니요")) == [("step", "EM03-04")]
+
+
+def test_slow_repeat_of_prompt(kit):
+    kit.say("팔에 화상을 입었어요")
+    out = kit.say("천천히 다시")
+    assert ids(out) == [("template", "T_SWITCH_ASK")] and out[0].speed == 1

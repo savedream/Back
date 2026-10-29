@@ -65,7 +65,7 @@ def open_prompt(run: Run, type: str, template_id: str, **values: str) -> Pending
     return prompt
 
 
-def reask_prompt(run: Run) -> None:
+def reask_prompt(run: Run, speed: int = 0) -> None:
     """확인 질문을 다시 묻고 15초를 다시 잰다."""
     prompt = run.s.pending_prompt
     values = {}
@@ -74,7 +74,7 @@ def reask_prompt(run: Run) -> None:
     elif prompt.template_id == "T_WHICH_OFF":
         values = {"devices": SOUND_DEVICES_SPOKEN}
     prompt.deadline = None
-    prompt.waits_for_action = run.say_template(prompt.template_id, **values)
+    prompt.waits_for_action = run.say_template(prompt.template_id, speed=speed, **values)
 
 
 def reask(run: Run) -> None:

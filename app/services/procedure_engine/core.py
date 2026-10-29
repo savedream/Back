@@ -27,7 +27,7 @@ def reduce(state: SessionState, inp: EngineInput, ctx: Ctx) -> EngineResult:
     elif kind == "device_button":
         request_device(run, inp.command.object, inp.command.type, "button")
     elif kind == "repeat_button":
-        functions.repeat(run, inp.scope, inp.speed)
+        functions.repeat_request(run, inp.scope, inp.speed)
     elif kind == "location_button":
         functions.handle_location_button(run)
     elif kind == "playback":

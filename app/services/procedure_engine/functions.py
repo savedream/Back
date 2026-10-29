@@ -36,6 +36,9 @@ def handle_function_call(run: Run, inp: FunctionCallInput) -> None:
     run.event("turn.result", {"function_call": fc.model_dump(), "error_code": None})
     run.s.speech_active = False
 
+    if func == 3:
+        repeat_request(run, fc.args["scope"], fc.args["speed"])
+        return
     prompt = run.s.pending_prompt
     if prompt is not None and prompt.type == "switch_confirm" and func != 1:
         _during_switch_confirm(run, fc)
@@ -66,9 +69,7 @@ def _during_switch_confirm(run: Run, fc: FunctionCall) -> None:
         store_observation(run, fc.observation, "situation" if fc.func == 0 else "correction")
         if try_i1(run, None, fc.observation) or try_i2(run, fc.observation):
             return
-    if fc.func == 3:
-        repeat(run, fc.args["scope"], fc.args["speed"])
-    elif fc.func == 4:
+    if fc.func == 4:
         # 확인 질문을 다시 묻거나, 기능에 확인이 필요하면 그 확인 질문이 전환 확인을 대신한다
         request_device(run, fc.args["object"], fc.args["type"], "voice")
         return
@@ -215,6 +216,15 @@ def _correct(run: Run, fc: FunctionCall) -> None:
     log_answer(run, step, [value], "answer", branch)
     run.preempt()
     goto(run, target)
+
+
+def repeat_request(run: Run, scope: int, speed: int) -> None:
+    """반복 요청(음성 func 3, 다시 듣기 버튼). 확인 질문이 걸려 있으면 취소하지 않고 그 질문을 다시 읽고 기다린다
+    (2026-10-29 팀 결정: 다시 들은 뒤의 '네'가 원래 질문의 답이 되지 않게)."""
+    if run.s.pending_prompt is not None:
+        reask_prompt(run, speed)
+    else:
+        repeat(run, scope, speed)
 
 
 def repeat(run: Run, scope: int, speed: int) -> None:
