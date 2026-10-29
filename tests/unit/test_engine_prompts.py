@@ -152,3 +152,12 @@ def test_answer_after_cancelled_which_on_answers_the_question(kit):
     out = ids(kit.say("네 많이 휘었어요"))  # 기능 요청이 아니라 원래 질문의 답: 확인 질문은 취소하고 그 답을 쓴다
     assert out == [("step", "EM03-05"), ("step", "EM03-06"), ("step", "EM03-07")]
     assert kit.state.pending_prompt is None
+
+
+def test_ems_arrival_only_records(kit):
+    kit.model.add("구급대 왔어요", "<maum_5>(type=4)<maum_end>")
+    kit.say("타이머 시작해 줘")
+    step = kit.state.step_id
+    kit.say("구급대 왔어요")
+    assert any(getattr(r, "note", None) == "구급대 도착" for r in kit.records)
+    assert kit.state.timer.status == "running" and kit.state.step_id == step  # 타이머·안내는 그대로
