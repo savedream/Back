@@ -30,9 +30,10 @@ class ScriptSpeaker:
             self._gate.set()
             self._gate = None
 
-    async def speak(self, utterance: Utterance, volume: int) -> str:
+    async def speak(self, utterance: Utterance, volume: int, on_sound) -> str:
         self.spoken.append(utterance)
         self.timeline.append(("say", utterance.utterance_id))
+        on_sound()
         if self._gate is not None:
             await self._gate.wait()
         if self.fail:

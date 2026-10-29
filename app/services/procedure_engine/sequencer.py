@@ -33,7 +33,8 @@ class Batch:
         self.turn_id = turn_id
         self.remaining = size
         self.done: asyncio.Future[None] = loop.create_future()
-        self.first_sound: asyncio.Future[float] = loop.create_future()  # 첫 문장 소리가 나간 시각(perf_counter)
+        self.created_at = time.perf_counter()  # 엔진 결과가 나온 시각(리듀스 직후에 만든다)
+        self.first_sound: asyncio.Future[float] = loop.create_future()  # 첫 소리가 실제로 나간 시각(perf_counter)
         if size == 0:
             self.done.set_result(None)
 
@@ -157,9 +158,13 @@ class Sequencer:
         self.set_speech_state("speaking")
         if item.silent:
             return "done"
-        task = self._playing = asyncio.create_task(self._speaker.speak(u, self._state().volume))
-        if not item.batch.first_sound.done():
-            item.batch.first_sound.set_result(time.perf_counter())  # turn.latency 기준
+        batch = item.batch
+
+        def on_sound() -> None:
+            if not batch.first_sound.done():
+                batch.first_sound.set_result(time.perf_counter())  # turn.latency 기준
+
+        task = self._playing = asyncio.create_task(self._speaker.speak(u, self._state().volume, on_sound))
         try:
             await asyncio.wait({task})
         except asyncio.CancelledError:

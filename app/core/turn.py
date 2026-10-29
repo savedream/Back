@@ -175,9 +175,8 @@ async def _run_turn(parts: Parts, model_timeout_s: float, turn_id: str, text: st
     if not say:
         _back_to_listening(parts)
     if speak:
-        produced = time.perf_counter()
         batch.first_sound.add_done_callback(
-            lambda sound: _report_latency(parts.events, turn_id, latency, started, produced, sound))
+            lambda sound: _report_latency(parts.events, turn_id, latency, started, batch.created_at, sound))
     else:
         await batch.done
     return UtteranceReply(turn_id=turn_id, normalized=normalized.text, raw=raw, function_call=function_call,
@@ -191,6 +190,6 @@ def _report_latency(events: EventSink, turn_id: str, latency: dict[str, int], st
         return
     at = sound.result()
     data = {key: latency.get(key) for key in _LATENCY_KEYS}
-    data["tts_first"] = max(0, round((at - produced) * 1000))
+    data["tts_first"] = round((at - produced) * 1000)
     data["e2e"] = round((at - started) * 1000)
     events.publish("turn.latency", turn_id, data)

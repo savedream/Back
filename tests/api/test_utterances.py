@@ -158,3 +158,18 @@ async def test_silent_turn_while_reading_stays_speaking(kit):
     gate.set()
     await kit.settle()
     assert [e.data["state"] for e in kit.events if e.type == "speech.state"][-1] == "armed"
+
+
+async def test_latency_counts_until_first_sound(kit):
+    speak = kit.parts.speaker.speak
+
+    async def slow_first_sound(utterance, volume, on_sound):
+        await asyncio.sleep(0.05)  # 합성에 걸리는 시간
+        return await speak(utterance, volume, on_sound)
+
+    kit.parts.speaker.speak = slow_first_sound
+    await kit.say("등산하다 넘어졌는데 다리를 움직이기 어려워요", speak=True, settle=False)
+    await asyncio.sleep(0.2)  # 실제 시간으로 두 문장을 읽게 둔다
+    await kit.settle()
+    latency = next(e.data for e in kit.events if e.type == "turn.latency")
+    assert latency["tts_first"] >= 50 and latency["e2e"] >= latency["tts_first"]

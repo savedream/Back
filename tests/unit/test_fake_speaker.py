@@ -7,12 +7,13 @@ U = Utterance(utterance_id="u_1", role="notice", text="안녕", screen=None, sou
 
 
 async def test_speaks_at_once():
-    speaker = FakeSpeaker()
-    assert await speaker.speak(U, 70) == "done"
-    assert speaker.spoken == [U]
+    speaker, sounds = FakeSpeaker(), []
+    assert await speaker.speak(U, 70, lambda: sounds.append(1)) == "done"
+    assert speaker.spoken == [U] and sounds == [1]
 
 
 async def test_no_speaker_is_text_only():
-    speaker = FakeSpeaker()
+    speaker, sounds = FakeSpeaker(), []
     speaker.present = False
-    assert await speaker.speak(U, 70) == "text_only"
+    assert await speaker.speak(U, 70, lambda: sounds.append(1)) == "text_only"
+    assert sounds == []  # 소리는 나가지 않음
