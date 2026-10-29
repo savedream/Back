@@ -32,7 +32,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.readiness = Readiness()
     install_error_handlers(app)
 
-    # TODO(미정: 아이패드 연결) 접근 제한이 정해지기 전까지 인증 없음
+    # 인증 없음: 화면은 키트가 만든 전용 Wi-Fi(AP)에서만 접속하고, 접근은 Wi-Fi 비밀번호로 막는다
     api = APIRouter(prefix="/api")
     api.include_router(system.router)
     app.include_router(api)
