@@ -133,6 +133,13 @@ def ask_again(run: Run) -> None:
         ask(run, step)
 
 
+def continue_from_say(run: Run) -> None:
+    """say처럼 멈춰 설 수 없는 단계에 서 있으면(말하기 버튼으로 되돌아온 곳) 그 단계부터 다시 이어 간다(6-2)."""
+    step = current_step(run)
+    if step is not None and step["kind"] not in ("ask", "wait") and run.s.pending_prompt is None:
+        goto(run, step["step_id"])
+
+
 def current_step(run: Run) -> dict | None:
     return run.db.steps_by_id[run.s.step_id] if run.s.step_id else None
 

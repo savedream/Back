@@ -9,7 +9,9 @@ import pytest
 from app.services.procedure_engine import service as service_module
 from app.services.procedure_engine.actions import EngineResult
 from app.schemas.device import DeviceCommand
-from app.services.procedure_engine.inputs import DeviceButtonInput, LocationUpdateInput, SpeechActivityInput
+from app.services.procedure_engine.inputs import (
+    BargeInInput, DeviceButtonInput, LocationUpdateInput, SpeechActivityInput,
+)
 from tests.unit.engine_kit import FIX, ids
 from tests.unit.shell_kit import ShellKit, until_idle, until_speaking
 
@@ -109,6 +111,42 @@ async def test_button_during_guidance_does_not_cut_it(kit):
     assert played == [("EM01-02", "done"), ("EM01-03", "done"), ("T_GPS_OK", "done"), ("EM01-05", "done"),
                       ("T_DEV_VOL_UP", "done"), ("EM01-05", "done")]  # 119·좌표 안내를 끝까지 읽고 음량 확인 뒤 다시 묻는다
     assert kit.state.volume == 80
+
+
+async def test_barge_in_resumes_from_unread_step_and_records_cut(kit):
+    await at_s1b(kit)
+    kit.speaker.hold()
+    already = len(kit.speaker.spoken)
+    await kit.engine.submit(kit.turn("네 많이 휘었어요"))
+    await until_speaking(kit.speaker, already)  # EM03-05를 읽는 중
+    await kit.engine.submit(BargeInInput(turn_id="t_barge"))
+    kit.speaker.release()
+    await kit.settle()
+    assert kit.state.step_id == "EM03-05"
+    played = [(r.utterance.step_id, r.played) for r in kit.records.records if r.kind == "kit_guidance"][-3:]
+    assert played == [("EM03-05", "cut"), ("EM03-06", "cut"), ("EM03-07", "cut")]
+    out = await kit.say("어 그게 아니고")
+    assert ids(out) == [("template", "T_RETRY"), ("step", "EM03-05"), ("step", "EM03-06"), ("step", "EM03-07")]
+    assert ids(await kit.advance(15)) == [("template", "T_NO_SPEECH"), ("step", "EM03-07")]
+
+
+async def test_barge_in_on_call_step_does_not_double_return(kit):
+    kit.model.add("상황이 잘 모르겠어요",
+                  "<maum_0>(situation=-1, conscious=-1, breathing=-1, bleeding=-1, movement=-1, scene_danger=-1)<maum_end>")
+    await kit.say("상황이 잘 모르겠어요")
+    await kit.say("네")
+    await kit.say("아니요")
+    assert kit.state.step_id == "EM00-06"
+    kit.speaker.hold()
+    already = len(kit.speaker.spoken)
+    await kit.engine.submit(kit.turn("네"))  # EM00-07(119 안내로 call) → COM-119
+    await until_speaking(kit.speaker, already)
+    await kit.engine.submit(BargeInInput(turn_id="t_barge"))
+    kit.speaker.release()
+    await kit.settle()
+    assert kit.state.step_id == "EM00-07" and kit.state.call_stack == []
+    await kit.say("어 그게 아니고")
+    assert len(kit.state.call_stack) == 1  # 다시 읽으며 돌아올 곳을 한 번만 쌓는다
 
 
 async def test_engine_device_runs_and_result_comes_back(kit):

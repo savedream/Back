@@ -118,3 +118,17 @@ def test_alert_move_keeps_listening_after_prompt_cancel(kit):
     kit.say("타이머 초기화해 줘")
     kit.advance(10)
     assert ids(kit.advance(15)) == [("template", "T_NO_SPEECH"), ("step", "EM01-11")]
+
+
+def test_barge_in_continues_from_unread_step_after_user_turn(kit):
+    at_s1b(kit)
+    kit.hold()
+    kit.say("네 많이 휘었어요")
+    kit.barge_in()
+    assert kit.state.step_id == "EM03-05"
+    mark = len(kit.records)
+    kit.release("cut")  # 시퀀서가 끊긴 문장을 cut으로 되먹임
+    cut = [(r.utterance.step_id, r.played) for r in kit.records[mark:] if r.kind == "kit_guidance"]
+    assert cut == [("EM03-05", "cut"), ("EM03-06", "cut"), ("EM03-07", "cut")]
+    assert ids(kit.say("어 그게 아니고")) == [("template", "T_RETRY"), ("step", "EM03-05"), ("step", "EM03-06"),
+                                             ("step", "EM03-07")]

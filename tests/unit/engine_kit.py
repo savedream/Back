@@ -1,4 +1,7 @@
-"""리듀서 시험 도구: 셸 없이 reduce()를 돌리며 낭독·장치·기록 되먹임을 바로 넣는다(speak: false와 같은 순서)."""
+"""리듀서 시험 도구: 셸 없이 reduce()를 돌리며 낭독·장치·기록 되먹임을 바로 넣는다(speak: false와 같은 순서).
+
+hold()를 걸면 낭독 끝 되먹임을 release()까지 미룬다(읽는 중 말하기 버튼·끊기 시험용).
+"""
 import re
 from datetime import timedelta
 
@@ -16,7 +19,7 @@ from app.services.procedure_engine.context import Ctx
 from app.services.procedure_engine.core import new_session, reduce
 from app.services.procedure_engine.engine_constants import PROGRESS_PHRASES
 from app.services.procedure_engine.inputs import (
-    DeviceResultInput, FunctionCallInput, ModelErrorInput, PlaybackInput, ProgressPhraseInput, RecordSavedInput,
+    BargeInInput, DeviceResultInput, FunctionCallInput, ModelErrorInput, PlaybackInput, ProgressPhraseInput, RecordSavedInput,
     SpeechActivityInput, TickInput,
 )
 from app.services.procedure_engine.timers import next_deadline
@@ -38,15 +41,40 @@ class EngineKit:
         self.devices: list = []
         self.events: list = []
         self.state = None
+        self._depth = 0
+        self.holding = False
+        self.held: list[SayAction] = []
+        self._after_barge_in = False  # 말하기 버튼 뒤 사용자 입력을 기다리는 중(say 단계에 서 있어도 멈춘 게 아님)
         self._apply(new_session(self.ctx()))
 
     def ctx(self) -> Ctx:
         return Ctx(db=DB, now=self.clock.now(), wall=self.clock.wall(), location=self.location)
 
     def feed(self, inp) -> EngineResult:
-        res = reduce(self.state, inp, self.ctx())
-        self._apply(res)
+        if inp.kind == "barge_in":
+            self._after_barge_in = True
+        elif inp.kind in ("function_call", "model_error", "progress_phrase"):
+            self._after_barge_in = False
+        self._depth += 1
+        try:
+            res = reduce(self.state, inp, self.ctx())
+            self._apply(res)
+        finally:
+            self._depth -= 1
+        if self._depth == 0:
+            self._assert_not_stuck()
         return res
+
+    def _assert_not_stuck(self) -> None:
+        """되먹임까지 다 끝났는데 say 단계에 서 있거나, 들을 수 있는 질문인데 무응답 마감이 없으면 멈춘 것이다."""
+        s = self.state
+        step = DB.steps_by_id.get(s.step_id) if s.step_id else None
+        if step is None or s.pending_says or s.speech_active or self._after_barge_in:
+            return
+        assert step["kind"] in ("ask", "wait") or s.pending_prompt is not None, f"say 단계 {s.step_id}에 멈춤"
+        listening = not s.mic.paused and s.devices["rescue_signal"].want != "on"
+        if step["kind"] == "ask" and s.pending_prompt is None and listening:
+            assert s.no_speech.deadline is not None, f"질문 {s.step_id}에 무응답 마감이 없음"
 
     def _apply(self, res: EngineResult) -> None:
         self.state = res.state
@@ -55,7 +83,10 @@ class EngineKit:
             if isinstance(action, SayAction):
                 self.spoken.append(action.utterance)
                 self.say_actions.append(action)
-                self.feed(PlaybackInput(action_id=action.action_id, event="finished", result="done"))
+                if self.holding:
+                    self.held.append(action)
+                else:
+                    self.feed(PlaybackInput(action_id=action.action_id, event="finished", result="done"))
             elif isinstance(action, DeviceAction):
                 self.devices.append(action.command)
                 self.feed(DeviceResultInput(action_id=action.action_id, object=action.command.object, status="success"))
@@ -77,6 +108,18 @@ class EngineKit:
                 return self.spoken[start:]
             self.feed(TickInput())
         raise AssertionError("같은 마감으로 계속 깨어남")
+
+    def hold(self) -> None:
+        self.holding = True
+
+    def release(self, result: str = "done") -> None:
+        self.holding = False
+        held, self.held = self.held, []
+        for action in held:
+            self.feed(PlaybackInput(action_id=action.action_id, event="finished", result=result))
+
+    def barge_in(self) -> None:
+        self.feed(BargeInInput(turn_id="t_barge"))
 
     def db_step(self, step_id: str) -> dict:
         return DB.steps_by_id[step_id]

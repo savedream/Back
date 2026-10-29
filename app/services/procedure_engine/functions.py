@@ -212,8 +212,8 @@ def repeat(run: Run, scope: int, speed: int) -> None:
     step = current_step(run)
     if step is not None and step["kind"] == "ask":
         ask(run, step, speed)
-    elif step is not None and step["kind"] == "say" and step["tts"]:
-        run.say_step(step, "instruction", speed)
+    elif step is not None and step["kind"] != "wait":
+        return  # 말하기 버튼으로 되돌아온 say 단계: 입력 처리 뒤 그 단계부터 이어 간다
     elif run.s.spoken_step_id:
         spoken = run.db.steps_by_id[run.s.spoken_step_id]  # wait처럼 문장이 없으면 마지막으로 읽은 단계
         run.say_step(spoken, "instruction", speed)

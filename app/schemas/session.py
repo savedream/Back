@@ -70,6 +70,7 @@ class PendingSay(BaseModel):
 
     utterance: Utterance
     record_id: str
+    call_stack: list[Frame] = []  # 이 문장을 낼 때의 call_stack. 말하기 버튼으로 이 단계에 되돌아올 때 되살린다
 
 
 class Alert(BaseModel):
