@@ -63,7 +63,7 @@ def _during_switch_confirm(run: Run, fc: FunctionCall) -> None:
     그 밖의 함수는 각 규칙대로 처리한 뒤 확인 질문을 다시 묻고 15초를 다시 잰다."""
     if fc.observation is not None:
         store_observation(run, fc.observation, "situation" if fc.func == 0 else "correction")
-        if try_i1(run, None) or try_i2(run, fc.observation):
+        if try_i1(run, None, fc.observation) or try_i2(run, fc.observation):
             return
     if fc.func == 3:
         repeat(run, fc.args["scope"], fc.args["speed"])
@@ -79,7 +79,7 @@ def _during_switch_confirm(run: Run, fc: FunctionCall) -> None:
 
 def _report_situation(run: Run, fc: FunctionCall) -> None:
     store_observation(run, fc.observation, "situation")
-    if try_i1(run, None) or try_i2(run, fc.observation):
+    if try_i1(run, None, fc.observation) or try_i2(run, fc.observation):
         return
     situation = fc.args["situation"]
     active = run.s.active_manual_id
@@ -128,7 +128,7 @@ def _answer_check(run: Run, inp: FunctionCallInput, fc: FunctionCall) -> None:
     target = None
     if step is not None and step["kind"] == "ask" and run.s.pending_prompt is None:
         target = step[_answer_branch(step, fc)[0]]
-    if try_i1(run, target) or try_i2(run, fc.observation):
+    if try_i1(run, target, fc.observation) or try_i2(run, fc.observation):
         return
     if run.s.pending_prompt is not None:
         answer_prompt(run, fc.args["answer"])
@@ -170,7 +170,7 @@ def _user_report(run: Run, inp, report: str, step_id: str, basis: str) -> None:
 
 def _correct(run: Run, fc: FunctionCall) -> None:
     store_observation(run, fc.observation, "correction")
-    if try_i1(run, None):
+    if try_i1(run, None, fc.observation):
         return
     key = next(k for k, v in fc.observation.model_dump().items() if v != -1)
     value = getattr(fc.observation, key)

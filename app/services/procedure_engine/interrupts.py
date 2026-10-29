@@ -14,8 +14,11 @@ from app.services.procedure_engine.templates import SOUND_DEVICES_SPOKEN
 _I1_EXCLUDED_MANUALS = {C.CARDIAC_MANUAL, C.AED_MANUAL}
 
 
-def try_i1(run: Run, branch_target: str | None) -> bool:
-    """의식·호흡 값 묶음이 둘 다 정확히 [0]이고, 현재 단계와 이번 입력의 분기 목적지가 모두 EM-01·COM-AED 밖이면 심정지로."""
+def try_i1(run: Run, branch_target: str | None, said: Observation | None) -> bool:
+    """이번 입력이 의식이나 호흡 값을 말했고, 의식·호흡 값 묶음이 둘 다 정확히 [0]이고, 현재 단계와 이번 입력의 분기
+    목적지가 모두 EM-01·COM-AED 밖이면 심정지로. 예전에 저장한 값만으로는 걸지 않는다(2026-10-29 팀 결정)."""
+    if said is None or (said.conscious == -1 and said.breathing == -1):
+        return False
     obs = run.s.observation
     if not all(obs[k] is not None and obs[k].allowed == [0] for k in ("conscious", "breathing")):
         return False

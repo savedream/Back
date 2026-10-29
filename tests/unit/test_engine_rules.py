@@ -61,6 +61,16 @@ def test_s4_i1_from_fracture(kit):
     assert kit.state.active_manual_id == "EM-01" and "call119" in kit.state.flags
 
 
+def test_old_unconscious_values_do_not_restart_cardiac(kit):
+    at_s5b(kit)
+    kit.advance(120)
+    kit.say("아니요")  # 자동심장충격기 아직 → 회복 확인(EM01-13)
+    kit.say("네")  # 회복 → 압박 중지(EM01-16), MON-02
+    assert kit.state.step_id == "MON-02"
+    out = ids(kit.say("네"))  # 대답해요: 예전 의식 0·호흡 0만으로는 심정지(I1)를 다시 걸지 않는다
+    assert out[0] == ("step", "MON-04") and ("intro", "EM-01") not in out
+
+
 def test_s5_compression_and_i2_recovery(kit):
     kit.say("사람이 쓰러졌는데 숨을 안 쉬어")
     assert ids(kit.say("아니요 대답 없어요")) == [("step", "EM01-02"), ("step", "EM01-03"), ("template", "T_GPS_OK"),
