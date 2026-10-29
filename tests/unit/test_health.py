@@ -10,7 +10,7 @@ def test_health_shape_matches_spec(client):
     assert body["ok"] is True
     assert set(body["data"]) == {"ready", "version", "manual_db", "model"}
     assert body["data"]["version"] == "1.3.0"
-    assert body["data"]["manual_db"] == "v1.6"
+    assert body["data"]["manual_db"] == "v1.7"
     assert body["data"]["model"] == "v2.2"
 
 
