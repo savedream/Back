@@ -53,11 +53,11 @@ async def get_session_log(request: Request, session_id: str | None = None):
     info = await parts.records.session_info(session_id) if session_id else None
     if info is None and (session_id is None or session_id != current):
         raise AppError(ErrorCode.SESSION_NOT_FOUND)
-    started_at = state.started_at if session_id == current else info["started_at"]
     records = await parts.records.session_records(session_id) or []
     if session_id == current:
-        end = parts.clock.wall()
+        started_at, end = state.started_at, parts.clock.wall()
     else:
+        started_at = info["started_at"]
         end = datetime.fromisoformat(records[-1].at if records else started_at)
     return ok({
         "session_id": session_id,
