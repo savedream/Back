@@ -81,8 +81,8 @@ def handle_playback(run: Run, action_id: str, event: str, result: str | None) ->
     pending = run.s.pending_says.pop(action_id, None)
     if pending is not None:
         utterance = pending.utterance
-        run.record(KitGuidanceRecord(**run.record_base(pending.record_id), utterance=utterance,
-                                     played=result or "done"))
+        base = {**run.record_base(pending.record_id), "turn_id": pending.turn_id}
+        run.record(KitGuidanceRecord(**base, utterance=utterance, played=result or "done"))
         if utterance.source == "step" and utterance.step_id and result != "cut":
             run.s.spoken_step_id = utterance.step_id
     for alert in run.s.alerts:

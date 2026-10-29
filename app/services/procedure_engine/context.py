@@ -83,7 +83,7 @@ class Run:
         action_id = self.next_id("action", "x")
         record_id = self.next_id("record", "r")
         self.actions.append(SayAction(action_id=action_id, utterance=u, record_id=record_id))
-        self.s.pending_says[action_id] = PendingSay(utterance=u, record_id=record_id,
+        self.s.pending_says[action_id] = PendingSay(utterance=u, record_id=record_id, turn_id=self.turn_id,
                                                     call_stack=list(self.s.call_stack))
         self.s.last_utterance = u
         return action_id

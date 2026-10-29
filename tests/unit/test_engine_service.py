@@ -58,6 +58,13 @@ async def test_start_welcomes_and_records_guidance(kit):
     assert guidance.record_id == kit.events[1].data["record_id"]
 
 
+async def test_guidance_record_keeps_turn_id(kit):
+    await kit.say("등산하다 넘어졌는데 다리를 움직이기 어려워요")
+    said = [e for e in kit.events if e.type == "guide.say"][-1]
+    [record] = [r for r in kit.records.records if r.kind == "kit_guidance" and r.record_id == said.data["record_id"]]
+    assert record.turn_id == said.turn_id == "t_0001"
+
+
 async def test_s1_flow_through_shell(kit):
     assert ids(await kit.say("등산하다 넘어졌는데 다리를 움직이기 어려워요")) == [("intro", "EM-03"), ("step", "EM03-01")]
     assert ids(await kit.say("아니요 피는 안 나요")) == [("step", "EM03-04")]
