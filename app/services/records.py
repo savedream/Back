@@ -72,7 +72,8 @@ class SqliteRecordStore:
 
     실패하면 saved: false로 두고, 재시도 태스크가 엔진 시계로 retry_base_s부터 두 배씩(최대 retry_max_s) 기다렸다 다시 저장한다.
     세션 표의 행도 실패하면 같은 재시도 대상이다.
-    sqlite3 연결은 쓰기 스레드 안에서만 만들고 쓴다. 상태 스냅샷(6-14)도 run()으로 같은 스레드에서 저장한다.
+    sqlite3 연결은 쓰기 스레드 안에서만 만들고 쓴다(시작할 때 스레드를 띄우기 전에 지난 세션을 읽는 것만 따로).
+    상태 스냅샷(6-14)도 run()으로 같은 스레드에서 저장한다.
     """
 
     def __init__(self, path: Path, clock: Clock, events: EventSink, *, retry_base_s: float = 1,
@@ -91,13 +92,16 @@ class SqliteRecordStore:
         self._all: list[Record] = []  # 이 프로세스에서 받은 기록(발생 순서)
         self._sessions: dict[str, list[Record]] = {}  # 이 프로세스에서 연 세션별 기록(발생 순서)
         self._session_info: dict[str, dict] = {}
+        self._session_ids: set[str] = set()  # 세션 표의 세션 ID(SQLite + 이 프로세스에서 연 세션)
+        self.last_session_id: str | None = None  # 시작할 때 세션 표의 마지막 세션(전원을 켤 때의 previous_session_id)
         self._unsaved: dict[tuple[str, str], Record] = {}  # 저장에 실패해 다시 저장할 기록
         self._unsaved_sessions: dict[str, dict] = {}  # 저장에 실패해 다시 저장할 세션 표의 행
         self._retry_lock = asyncio.Lock()
         self._retry_task: asyncio.Task | None = None
 
     def start(self) -> None:
-        """쓰기 스레드를 띄운다. 스레드 결과를 이 이벤트 루프로 넘기므로 루프 안에서 부른다."""
+        """지난 세션을 읽어 두고 쓰기 스레드를 띄운다. 스레드 결과를 이 이벤트 루프로 넘기므로 루프 안에서 부른다."""
+        self._read_previous()
         self._loop = asyncio.get_running_loop()
         self._thread = threading.Thread(target=self._write_loop, name="record-writer", daemon=True)
         self._thread.start()
@@ -116,6 +120,24 @@ class SqliteRecordStore:
         self._closed = True
         self._jobs.put(None)
         await asyncio.to_thread(self._thread.join)
+
+    def _read_previous(self) -> None:
+        """세션 표의 세션 ID들을 읽는다. 읽지 못해도 서버는 시작한다."""
+        try:
+            conn = _connect(self._path)
+            try:
+                ids = [s for (s,) in conn.execute("SELECT session_id FROM sessions ORDER BY rowid")]
+            finally:
+                conn.close()
+        except Exception:
+            log.exception("지난 세션을 읽지 못함")
+            return
+        self._session_ids.update(ids)
+        self.last_session_id = ids[-1] if ids else None
+
+    def session_ids(self) -> frozenset[str]:
+        """이미 쓴 세션 ID. 엔진이 새 세션 ID를 겹치지 않게 고르는 데 쓴다."""
+        return frozenset(self._session_ids)
 
     @property
     def records(self) -> list[Record]:
@@ -158,6 +180,7 @@ class SqliteRecordStore:
         """세션 표에 남긴다. 바로 쓰기 큐에 넣으므로(그 세션 기록보다 먼저) 기다리지 않아도 된다. 실패하면 기록처럼 재시도한다."""
         info = {"session_id": session_id, "previous_session_id": previous_session_id, "started_at": started_at}
         self._session_info[session_id] = info
+        self._session_ids.add(session_id)
         self._sessions.setdefault(session_id, [])
         return self._attempt_session(info)
 

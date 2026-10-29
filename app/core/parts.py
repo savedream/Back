@@ -41,7 +41,8 @@ def build_parts(settings: Settings, db: ManualDB, clock: Clock) -> Parts:
     engine = EngineService(db, clock, events, speaker, devices, records, location=gps.location,
                            device_timeout_s=settings.device_timeout_s,
                            on_new_session=lambda s: records.save_session(s.session_id, s.previous_session_id,
-                                                                         s.started_at))
+                                                                         s.started_at),
+                           session_ids=records.session_ids)
     # GPS 재시도 중 위치가 잡히면 엔진이 T_GPS_OK를 읽는다(6-11)
     gps.listeners.append(lambda loc: engine.post(LocationUpdateInput(location=loc)))
     return Parts(clock, events, records, devices, gps, speaker, FakeModel(), engine)

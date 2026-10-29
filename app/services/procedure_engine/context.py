@@ -30,6 +30,7 @@ class Ctx:
     wall: datetime  # 기록·화면용 벽시계
     location: Location | None = None  # 지금 GPS 스냅샷. GPS 모듈이 없으면 None
     clock_source: Literal["gps", "rtc", "unsynced"] = "unsynced"
+    session_ids: frozenset[str] = frozenset()  # 이미 쓴 세션 ID. 새 세션 ID가 겹치면 _2, _3…을 붙인다
 
     def iso(self, after_s: float = 0) -> str:
         return iso(self.wall + timedelta(seconds=after_s))

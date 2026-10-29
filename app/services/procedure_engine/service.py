@@ -28,12 +28,14 @@ log = logging.getLogger(__name__)
 class EngineService:
     def __init__(self, db: ManualDB, clock: Clock, events: EventSink, speaker: Speaker, devices: DeviceController,
                  records: RecordSink, *, location: Callable[[], Location | None] = lambda: None,
-                 device_timeout_s: float = 2.0, on_new_session: Callable[[SessionState], object] | None = None):
+                 device_timeout_s: float = 2.0, on_new_session: Callable[[SessionState], object] | None = None,
+                 session_ids: Callable[[], frozenset[str]] = frozenset):
         self.db = db
         self.clock = clock
         self.events = events
         self._location = location  # GPS 스냅샷. GPS 모듈이 없으면 None
         self._on_new_session = on_new_session  # 새 세션을 열면(start, session_reset) 부른다. 세션 표에 남기는 데 쓴다
+        self._session_ids = session_ids  # 이미 쓴 세션 ID(세션 표)
         self.state: SessionState | None = None
         self.sequencer = Sequencer(db, events, speaker, devices, records, self.submit, lambda: self.state, clock,
                                    device_timeout_s)
@@ -42,11 +44,11 @@ class EngineService:
         self._skipped: set[float] = set()  # 처리하지 못한 마감. 같은 마감으로 계속 깨어나지 않게 건너뛴다
         self._task: asyncio.Task | None = None
 
-    async def start(self) -> None:
-        """새 세션을 열고(T_WELCOME) 엔진 태스크를 띄운다. 준비가 끝난 뒤에 부른다."""
+    async def start(self, previous_session_id: str | None = None) -> None:
+        """새 세션을 열고(T_WELCOME) 엔진 태스크를 띄운다. 준비가 끝난 뒤에 부른다. previous_session_id: 지난 세션."""
         self.sequencer.start()
         ctx = self._ctx()
-        self._apply(None, new_session(ctx), ctx, speak=True)
+        self._apply(None, new_session(ctx, previous_session_id=previous_session_id), ctx, speak=True)
         self._task = asyncio.create_task(self._run())
         self._task.add_done_callback(_log_crash)
 
@@ -80,7 +82,8 @@ class EngineService:
         return result
 
     def _ctx(self) -> Ctx:
-        return Ctx(db=self.db, now=self.clock.now(), wall=self.clock.wall(), location=self._location())
+        return Ctx(db=self.db, now=self.clock.now(), wall=self.clock.wall(), location=self._location(),
+                   session_ids=self._session_ids())
 
     def _deadline(self) -> float | None:
         if self.state is None:

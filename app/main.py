@@ -34,7 +34,7 @@ def create_app(settings: Settings | None = None, *, clock: Clock | None = None) 
                 readiness.mark_ready(component)
         # 준비가 끝났으면 새 세션을 열고 T_WELCOME. 실제 부품을 백그라운드로 적재하게 되면(키트 단계) 끝난 뒤에 시작한다
         if readiness.ready:
-            await parts.engine.start()
+            await parts.engine.start(previous_session_id=parts.records.last_session_id)
         yield
         parts.events.close_all()  # 열린 SSE 스트림을 먼저 닫는다(서버 정상 종료를 붙잡지 않게)
         await parts.engine.stop()

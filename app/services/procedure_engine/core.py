@@ -85,10 +85,20 @@ def _barge_in(run: Run) -> None:
         run.set_step(unspoken[0].utterance.step_id)
 
 
-def new_session(ctx: Ctx, previous: SessionState | None = None, turn_id: str | None = None) -> EngineResult:
-    """새 세션: 켜진 소리를 끄고 알림을 취소하고, 준비가 끝났으면 T_WELCOME(6-14)."""
-    session_id = "s_" + ctx.wall.strftime("%Y%m%d_%H%M")
-    state = SessionState(session_id=session_id, previous_session_id=previous.session_id if previous else None,
+def new_session(ctx: Ctx, previous: SessionState | None = None, turn_id: str | None = None,
+                previous_session_id: str | None = None) -> EngineResult:
+    """새 세션: 켜진 소리를 끄고 알림을 취소하고, 준비가 끝났으면 T_WELCOME(6-14).
+
+    전원을 켤 때는 previous 없이 지난 세션 ID(previous_session_id)만 받는다. 같은 분의 세션 ID가 이미 있으면 _2, _3…을 붙인다.
+    """
+    taken = (ctx.session_ids | {previous.session_id}) if previous else ctx.session_ids
+    base = session_id = "s_" + ctx.wall.strftime("%Y%m%d_%H%M")
+    n = 1
+    while session_id in taken:
+        n += 1
+        session_id = f"{base}_{n}"
+    state = SessionState(session_id=session_id,
+                         previous_session_id=previous.session_id if previous else previous_session_id,
                          started_at=ctx.iso())
     if previous is not None:
         state.counters = previous.counters.model_copy()
