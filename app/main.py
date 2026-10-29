@@ -32,9 +32,10 @@ def create_app(settings: Settings | None = None, *, clock: Clock | None = None) 
         if settings.fake_auto_ready:
             for component in (Component.VAD, Component.STT, Component.TTS, Component.LLM, Component.LLM_WARMUP):
                 readiness.mark_ready(component)
-        # 준비가 끝났으면 새 세션을 열고 T_WELCOME. 실제 부품을 백그라운드로 적재하게 되면(키트 단계) 끝난 뒤에 시작한다
+        # 준비가 끝났으면 새 세션(T_WELCOME)이나 같은 부팅의 스냅샷에서 이어 간다(T_RESUME).
+        # 실제 부품을 백그라운드로 적재하게 되면(키트 단계) 끝난 뒤에 시작한다
         if readiness.ready:
-            await parts.engine.start(previous_session_id=parts.records.last_session_id)
+            await parts.start_engine()
         yield
         parts.events.close_all()  # 열린 SSE 스트림을 먼저 닫는다(서버 정상 종료를 붙잡지 않게)
         await parts.engine.stop()

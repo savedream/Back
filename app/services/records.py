@@ -5,6 +5,7 @@ import queue
 import sqlite3
 import threading
 from collections.abc import Callable
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import Any, Protocol, TypeVar
@@ -45,6 +46,16 @@ CREATE TABLE IF NOT EXISTS snapshots (
     json TEXT NOT NULL
 );
 """
+
+
+@dataclass(frozen=True)
+class Snapshot:
+    """상태 스냅샷(6-14). saved_wall: 저장한 벽시계(POSIX 초), saved_now: 저장한 엔진 시계(단조 초)."""
+
+    state: SessionState
+    saved_wall: float
+    saved_now: float
+    boot_id: str | None
 
 
 class RecordSink(Protocol):
@@ -103,6 +114,7 @@ class SqliteRecordStore:
         self._session_info: dict[str, dict] = {}
         self._session_ids: set[str] = set()  # 세션 표의 세션 ID(SQLite + 이 프로세스에서 연 세션)
         self.last_session_id: str | None = None  # 시작할 때 세션 표의 마지막 세션(전원을 켤 때의 previous_session_id)
+        self.last_snapshot: Snapshot | None = None  # 시작할 때 마지막으로 저장된 상태 스냅샷
         self._unsaved: dict[tuple[str, str], Record] = {}  # 저장에 실패해 다시 저장할 기록
         self._unsaved_sessions: dict[str, dict] = {}  # 저장에 실패해 다시 저장할 세션 표의 행
         self._snapshot: tuple | None = None  # 아직 쓰지 않은 마지막 스냅샷 행. 쓰기 스레드와 함께 쓰므로 잠금으로 바꾼다
@@ -134,11 +146,13 @@ class SqliteRecordStore:
         await asyncio.to_thread(self._thread.join)
 
     def _read_previous(self) -> None:
-        """세션 표의 세션 ID들을 읽는다. 읽지 못해도 서버는 시작한다."""
+        """세션 표의 세션 ID들과 마지막 상태 스냅샷을 읽는다. 읽지 못해도 서버는 시작한다(새 세션)."""
         try:
             conn = _connect(self._path)
             try:
                 ids = [s for (s,) in conn.execute("SELECT session_id FROM sessions ORDER BY rowid")]
+                snap = conn.execute("SELECT json, saved_wall, saved_now, boot_id FROM snapshots "
+                                    "ORDER BY rowid DESC LIMIT 1").fetchone()
             finally:
                 conn.close()
         except Exception:
@@ -146,6 +160,20 @@ class SqliteRecordStore:
             return
         self._session_ids.update(ids)
         self.last_session_id = ids[-1] if ids else None
+        if snap is not None:
+            try:
+                self.last_snapshot = Snapshot(SessionState.model_validate_json(snap[0]), *snap[1:])
+            except ValueError:
+                log.exception("상태 스냅샷을 읽지 못함")
+
+    async def resume_session(self, session_id: str) -> None:
+        """이어 가는 세션(6-14)의 지난 기록을 SQLite에서 읽어 이 프로세스의 세션으로 둔다(세션 기록이 끊기기 전부터 이어지게)."""
+        try:
+            earlier = await self.run(partial(_load_records, session_id=session_id))
+        except Exception:
+            log.exception("이어 가는 세션의 지난 기록을 읽지 못함: %s", session_id)
+            return
+        self._sessions[session_id] = (earlier or []) + self._sessions.get(session_id, [])
 
     def session_ids(self) -> frozenset[str]:
         """이미 쓴 세션 ID. 엔진이 새 세션 ID를 겹치지 않게 고르는 데 쓴다."""

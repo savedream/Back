@@ -7,8 +7,9 @@ from app.services.procedure_engine import functions, timers
 from app.services.procedure_engine.actions import EngineResult
 from app.services.procedure_engine.context import Ctx, Run
 from app.services.procedure_engine.devices_rules import device_result, request_device
-from app.services.procedure_engine.flow import cancel_alerts, continue_from_say, set_sound_device
+from app.services.procedure_engine.flow import cancel_alerts, continue_from_say, set_sound_device, start_alert
 from app.services.procedure_engine.inputs import EngineInput
+from app.services.procedure_engine.interrupts import clear_prompt
 
 # 처리한 뒤 say 단계에 서 있으면 그 단계부터 이어 가는 입력(말하기 버튼으로 되돌아온 경우, 6-2)
 _CONTINUE_AFTER = {"function_call", "model_error", "progress_phrase", "device_button", "repeat_button",
@@ -112,4 +113,38 @@ def new_session(ctx: Ctx, previous: SessionState | None = None, turn_id: str | N
         set_sound_device(run, name, on=False, source="engine")
     cancel_alerts(run)
     run.say_template("T_WELCOME")
+    return run.result()
+
+
+def resume_session(state: SessionState, ctx: Ctx, saved_now: float, downtime_s: float) -> EngineResult:
+    """같은 부팅에서 백엔드만 다시 떴을 때 스냅샷(저장 시각 saved_now)에서 그 세션을 이어 간다(6-14).
+
+    엔진 시계의 시각(알림 마감, 타이머 구간 시작, GPS 재시도 마감)은 저장 시각 기준 남은 시간에서 끊긴 시간(downtime_s)을
+    뺀 만큼으로 옮긴다. 끊긴 동안 끝난 알림은 마감이 이미 지나 다음 Tick에서 바로 처리된다. 읽던 문장·말소리·확인 질문·
+    응답을 기다리던 장치 명령과 무응답·대기 마감은 버리고(현재 단계를 다시 읽으면 sync_timers가 다시 건다), 켜져 있던
+    메트로놈·구조신호는 다시 켠다(재연결 때 자동으로 울리지 않는 규칙의 예외). T_RESUME 뒤에 현재 단계를 다시 읽는다.
+    """
+    run = Run(state, ctx, None)
+    s, shift = run.s, ctx.now - downtime_s - saved_now
+    for alert in s.alerts:
+        if alert.deadline is not None:
+            alert.deadline += shift
+    if s.timer.running_since is not None:
+        s.timer.running_since += shift
+    if s.gps_retry is not None:
+        s.gps_retry.give_up_at += shift
+    s.pending_says, s.speech_active, s.pending_devices, s.timer_reset_record = {}, False, {}, None
+    s.no_speech.deadline = None
+    s.wait_deadline = None
+    clear_prompt(run)
+    for alert in s.alerts:
+        if alert.waits_for_action is not None:
+            start_alert(run, alert)  # 그 단계 문장을 읽다 끊겼으면 지금부터 잰다
+    for name in ("metronome", "rescue_signal"):
+        if s.devices[name].want == "on":
+            set_sound_device(run, name, on=True, source="engine", force=True)
+    run.say_template("T_RESUME")
+    functions.repeat(run, 2, 0)  # ask면 질문, wait면 마지막으로 읽은 단계
+    continue_from_say(run)  # say 단계(말하기 버튼으로 되돌아온 곳)면 그 단계부터
+    timers.sync_timers(run)
     return run.result()

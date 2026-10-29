@@ -27,6 +27,18 @@ class Parts:
     speaker: FakeSpeaker
     model: FakeModel
     engine: EngineService
+    boot_id: str | None = None
+    resume_from_snapshot: bool = False
+
+    async def start_engine(self) -> None:
+        """준비가 끝나면 부른다. 같은 부팅에서 백엔드만 다시 떴으면(스냅샷의 boot_id가 지금과 같으면) 스냅샷에서 이어 가고,
+        부팅이 다르거나 알 수 없으면 지난 세션 다음의 새 세션을 연다(6-14)."""
+        snap = self.records.last_snapshot
+        if snap is None or not self.resume_from_snapshot or self.boot_id is None or snap.boot_id != self.boot_id:
+            snap = None
+        else:
+            await self.records.resume_session(snap.state.session_id)
+        await self.engine.start(previous_session_id=self.records.last_session_id, snapshot=snap)
 
 
 def read_boot_id(path: Path) -> str | None:
@@ -42,9 +54,9 @@ def build_parts(settings: Settings, db: ManualDB, clock: Clock) -> Parts:
     if real:
         raise RuntimeError(f"실제 부품은 아직 없음: {', '.join(f'{n}=false' for n in real)}")
     events = EventBus(clock)
+    boot_id = read_boot_id(settings.boot_id_path)
     records = SqliteRecordStore(settings.records_db_path, clock, events, retry_base_s=settings.record_retry_base_s,
-                                retry_max_s=settings.record_retry_max_s,
-                                boot_id=read_boot_id(settings.boot_id_path))
+                                retry_max_s=settings.record_retry_max_s, boot_id=boot_id)
     devices = FakeDevices()
     gps = FakeGps(clock)
     speaker = FakeSpeaker()
@@ -55,4 +67,5 @@ def build_parts(settings: Settings, db: ManualDB, clock: Clock) -> Parts:
                            session_ids=records.session_ids, on_state=records.save_snapshot)
     # GPS 재시도 중 위치가 잡히면 엔진이 T_GPS_OK를 읽는다(6-11)
     gps.listeners.append(lambda loc: engine.post(LocationUpdateInput(location=loc)))
-    return Parts(clock, events, records, devices, gps, speaker, FakeModel(), engine)
+    return Parts(clock, events, records, devices, gps, speaker, FakeModel(), engine, boot_id,
+                 settings.resume_from_snapshot)

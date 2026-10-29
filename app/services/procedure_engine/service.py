@@ -14,12 +14,12 @@ from app.services.manual_db import ManualDB
 from app.services.procedure_engine.actions import EngineResult
 from app.services.procedure_engine.clock import Clock
 from app.services.procedure_engine.context import Ctx
-from app.services.procedure_engine.core import new_session, recover, reduce
+from app.services.procedure_engine.core import new_session, recover, reduce, resume_session
 from app.services.procedure_engine.inputs import EngineInput, TickInput
 from app.services.procedure_engine.sequencer import Batch, Sequencer
 from app.services.procedure_engine.timers import deadlines
 from app.services.procedure_engine.view import session_changes
-from app.services.records import RecordSink
+from app.services.records import RecordSink, Snapshot
 from app.services.tts import Speaker
 
 log = logging.getLogger(__name__)
@@ -46,11 +46,22 @@ class EngineService:
         self._skipped: set[float] = set()  # 처리하지 못한 마감. 같은 마감으로 계속 깨어나지 않게 건너뛴다
         self._task: asyncio.Task | None = None
 
-    async def start(self, previous_session_id: str | None = None) -> None:
-        """새 세션을 열고(T_WELCOME) 엔진 태스크를 띄운다. 준비가 끝난 뒤에 부른다. previous_session_id: 지난 세션."""
+    async def start(self, previous_session_id: str | None = None, snapshot: Snapshot | None = None) -> None:
+        """엔진 태스크를 띄운다. 준비가 끝난 뒤에 부른다. snapshot이 있으면 그 세션을 이어 가고(T_RESUME, 6-14),
+        없으면 새 세션을 연다(T_WELCOME, previous_session_id: 지난 세션)."""
         self.sequencer.start()
         ctx = self._ctx()
-        self._apply(None, new_session(ctx, previous_session_id=previous_session_id), ctx, speak=True)
+        result = None
+        if snapshot is not None:
+            downtime = max(0.0, ctx.wall.timestamp() - snapshot.saved_wall)  # 끊긴 시간(벽시계 차이)
+            try:
+                result = resume_session(snapshot.state, ctx, snapshot.saved_now, downtime)
+            except Exception:
+                log.exception("스냅샷에서 이어 가지 못해 새 세션을 연다: %s", snapshot.state.session_id)
+        if result is None:
+            self._apply(None, new_session(ctx, previous_session_id=previous_session_id), ctx, speak=True)
+        else:
+            self._apply(None, result, ctx, speak=True, resumed=True)
         self._task = asyncio.create_task(self._run())
         self._task.add_done_callback(_log_crash)
 
@@ -148,12 +159,14 @@ class EngineService:
         except Exception:
             log.exception("실패한 입력 뒤 정리도 실패: %s", inp.kind)
 
-    def _apply(self, before: SessionState | None, result: EngineResult, ctx: Ctx, speak: bool) -> Batch:
+    def _apply(self, before: SessionState | None, result: EngineResult, ctx: Ctx, speak: bool,
+               resumed: bool = False) -> Batch:
         self.state = result.state
         # 시퀀서에 먼저 넘긴다. 시퀀서는 이 함수가 끝나 차례가 와야 돌므로 이벤트 순서는 그대로이고,
         # 이벤트 발행이 실패해도 낭독이 빠지지 않는다(빠지면 남은 문장 때문에 마감이 걸리지 않는다)
         batch = self.sequencer.submit(result, speak)
-        if self._on_new_session is not None and result.state.session_id != (before.session_id if before else None):
+        opened = not resumed and result.state.session_id != (before.session_id if before else None)
+        if self._on_new_session is not None and opened:  # 이어 가는 세션은 이미 세션 표에 있다
             try:
                 self._on_new_session(result.state)
             except Exception:

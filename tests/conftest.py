@@ -9,6 +9,8 @@ from app.main import create_app
 def _records_db_in_tmp(tmp_path, monkeypatch):
     # Settings를 직접 만드는 시험도 기록 DB를 저장소 폴더가 아닌 tmp에 둔다
     monkeypatch.setenv("SALYEO_RECORDS_DB_PATH", str(tmp_path / "records.db"))
+    # 스냅샷 이어가기는 그 시험에서만 켠다(Linux에서는 boot_id 파일이 있어 같은 DB를 다시 열면 이어 갈 수 있다)
+    monkeypatch.setenv("SALYEO_RESUME_FROM_SNAPSHOT", "false")
 
 
 @pytest.fixture
