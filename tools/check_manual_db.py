@@ -2,7 +2,7 @@
 """매뉴얼 DB 검사.
 
 사용: python tools/check_manual_db.py [DB json] [주석판 jsonc]
-기본값: data/manual_db_v1.6.json, 주석판은 docs/ 또는 상위 폴더의 docs/ (없으면 비교 생략)
+기본값: data/manual_db.json, 주석판은 docs/ 또는 상위 폴더의 docs/의 manual_db_주석판_{DB 버전}.jsonc (없으면 비교 생략)
 반드시 통과해야 하는 항목이 하나라도 어긋나면 종료 코드 1.
 """
 import json, re, sys
@@ -11,14 +11,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 db_path = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / 'data' / 'manual_db.json'
+db = json.loads(db_path.read_text(encoding='utf-8'))
+# meta.version 예: "v1.7 (2026-10-14, …)" → "v1.7"
+db_version = db['meta']['version'].split()[0]
 if len(sys.argv) > 2:
     jsonc_path = Path(sys.argv[2])
 else:
     # 주석판은 레포 밖(상위 폴더의 docs/)에 있을 수 있다. 없으면 비교를 건너뛴다
-    jsonc_path = next((p for p in [ROOT / 'docs' / 'manual_db_주석판_v1.6.jsonc',
-                                   ROOT.parent / 'docs' / 'manual_db_주석판_v1.6.jsonc'] if p.exists()),
-                      ROOT / 'docs' / 'manual_db_주석판_v1.6.jsonc')
-db = json.loads(db_path.read_text(encoding='utf-8'))
+    jsonc_name = f'manual_db_주석판_{db_version}.jsonc'
+    jsonc_path = next((p for p in [ROOT / 'docs' / jsonc_name, ROOT.parent / 'docs' / jsonc_name] if p.exists()),
+                      ROOT / 'docs' / jsonc_name)
 db_c = None
 if jsonc_path.exists():
     jsonc = jsonc_path.read_text(encoding='utf-8')
