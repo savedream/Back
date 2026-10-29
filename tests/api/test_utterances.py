@@ -3,7 +3,28 @@ import asyncio
 
 import pytest
 
+from app.core import turn as turn_module
 from tests.scenario.kit import Kit, ids
+
+
+async def until(check, limit: int = 1000) -> None:
+    for _ in range(limit):
+        if check():
+            return
+        await asyncio.sleep(0)
+    raise AssertionError("기다려도 되지 않음")
+
+
+def hold_model(kit: Kit) -> asyncio.Event:
+    gate = asyncio.Event()
+    run = kit.model.run
+
+    async def held(text: str) -> str:
+        await gate.wait()
+        return await run(text)
+
+    kit.model.run = held
+    return gate
 
 
 @pytest.fixture
@@ -51,8 +72,7 @@ async def test_second_turn_while_first_is_processing_is_409(kit):
 
     kit.model.run = held
     first = asyncio.create_task(kit.post("등산하다 넘어졌는데 다리를 움직이기 어려워요"))
-    while not kit.app.state.turn_lock.busy:
-        await asyncio.sleep(0)
+    await until(lambda: kit.app.state.turn_lock.busy)
     second = await kit.post("사람이 쓰러졌는데 숨을 안 쉬어")
     assert second.status_code == 409
     assert second.json()["error"] == {"code": "AUDIO_BUSY", "message": "다른 턴을 처리 중입니다"}
@@ -84,3 +104,57 @@ async def test_turn_without_speech_goes_back_to_listening(kit):
 def test_not_ready_is_503(client):
     res = client.post("/api/utterances", json={"text": "네"})
     assert res.status_code == 503 and res.json()["error"]["code"] == "NOT_READY"
+
+
+async def test_timers_pause_while_text_turn_is_processed(kit):
+    await kit.say("등산하다 넘어졌는데 다리를 움직이기 어려워요")
+    await kit.say("아니요 피는 안 나요")
+    gate = hold_model(kit)
+    reply = asyncio.create_task(kit.post("네 많이 휘었어요"))
+    await until(lambda: kit.state.speech_active)
+    mark = len(kit.spoken)
+    kit.clock.advance(20)  # 모델이 처리하는 동안 무응답 15초가 지나도
+    for _ in range(50):
+        await asyncio.sleep(0)
+    assert kit.spoken_since(mark) == []
+    gate.set()
+    data = (await reply).json()["data"]
+    assert ids(data["say"]) == [("step", "EM03-05"), ("step", "EM03-06"), ("step", "EM03-07")]  # 답이 쓰인다
+
+
+async def test_failed_turn_restores_listening(kit, monkeypatch):
+    async def broken(*args):
+        raise RuntimeError("시험용 오류")
+
+    monkeypatch.setattr(turn_module, "interpret", broken)
+    res = await kit.post("등산하다 넘어졌는데 다리를 움직이기 어려워요")
+    assert res.status_code == 500 and res.json()["error"]["code"] == "INTERNAL_ERROR"
+    await kit.settle()
+    states = [e.data["state"] for e in kit.events if e.type == "speech.state"]
+    assert states[-1] == "armed" and not kit.app.state.turn_lock.busy and kit.state.speech_active is False
+
+
+async def test_silent_turn_while_reading_stays_speaking(kit):
+    await kit.say("사람이 쓰러졌는데 숨을 안 쉬어")
+    await kit.say("아니요 대답 없어요")
+    await kit.say("아니요")  # EM01-15 압박 대기
+    gate = asyncio.Event()
+    speak = kit.parts.speaker.speak
+
+    async def held(*args):
+        await gate.wait()
+        return await speak(*args)
+
+    kit.parts.speaker.speak = held
+    await kit.say("여기 어디야", speak=True, settle=False)
+    await until(lambda: kit.parts.engine.sequencer.reading)  # 좌표를 읽는 중
+    kit.drain()
+    mark = len(kit.events)
+    # 대기 단계 확인 응답이라 읽을 문장이 없음. speak: false는 앞 낭독이 끝나야 응답하므로 true로
+    await kit.say("네", speak=True, settle=False)
+    kit.drain()
+    during = [e.data["state"] for e in kit.events[mark:] if e.type == "speech.state"]
+    assert during == ["processing", "speaking"]  # 아직 읽는 중이라 '듣는 중'으로 바꾸지 않는다
+    gate.set()
+    await kit.settle()
+    assert [e.data["state"] for e in kit.events if e.type == "speech.state"][-1] == "armed"

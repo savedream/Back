@@ -85,6 +85,12 @@ class Sequencer:
     def idle(self) -> bool:
         return not self._queue and self._current is None and not self._side
 
+    @property
+    def reading(self) -> bool:
+        """읽고 있거나 읽을 문장이 남았는지(버려진 문장 제외)."""
+        items = ([self._current] if self._current is not None else []) + list(self._queue)
+        return any(isinstance(i.action, SayAction) and not i.cut for i in items)
+
     def submit(self, result: EngineResult, speak: bool = True) -> Batch:
         if result.mode == "replace":
             self._cut()

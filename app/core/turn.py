@@ -22,7 +22,9 @@ from app.services.normalizer import normalize
 from app.services.output_parser import ModelOutputError, parse
 from app.services.procedure_engine.actions import SayAction
 from app.services.procedure_engine.functions import is_progress_phrase
-from app.services.procedure_engine.inputs import FunctionCallInput, ModelErrorInput, ProgressPhraseInput
+from app.services.procedure_engine.inputs import (
+    FunctionCallInput, ModelErrorInput, ProgressPhraseInput, SpeechActivityInput,
+)
 from app.services.procedure_engine.timers import listen_state
 
 log = logging.getLogger(__name__)
@@ -130,6 +132,28 @@ async def run_utterance(parts: Parts, model_timeout_s: float, turn_id: str, text
     engine, sequencer = parts.engine, parts.engine.sequencer
     started = time.perf_counter()
     sequencer.set_speech_state("processing")
+    # 턴을 처리하는 동안 무응답·대기 타이머를 멈추고 절차 알림은 턴이 끝난 뒤로 미룬다(6-9, 6-12)
+    engine.post(SpeechActivityInput(state="started"))
+    try:
+        return await _run_turn(parts, model_timeout_s, turn_id, text, speak, started)
+    except Exception:
+        engine.post(SpeechActivityInput(state="cancelled"))
+        _back_to_listening(parts)  # 실패해도 "처리 중"이 남지 않게
+        raise
+
+
+def _back_to_listening(parts: Parts) -> None:
+    """읽을 문장이 없는 턴이 끝났을 때의 듣기 상태. 앞 턴의 안내를 아직 읽는 중이면 안내 중으로 둔다."""
+    sequencer = parts.engine.sequencer
+    if sequencer.reading:
+        sequencer.set_speech_state("speaking")
+    else:
+        sequencer.set_speech_state(**listen_state(parts.engine.state))
+
+
+async def _run_turn(parts: Parts, model_timeout_s: float, turn_id: str, text: str, speak: bool,
+                    started: float) -> UtteranceReply:
+    engine = parts.engine
     latency: dict[str, int] = {}
     normalized = normalize(text)
     latency["normalize"] = _elapsed_ms(started)
@@ -149,7 +173,7 @@ async def run_utterance(parts: Parts, model_timeout_s: float, turn_id: str, text
     latency["engine"] = _elapsed_ms(start)
     say = [a.utterance for a in result.actions if isinstance(a, SayAction)]
     if not say:
-        sequencer.set_speech_state(**listen_state(engine.state))  # 읽을 문장이 없으면 바로 듣기로
+        _back_to_listening(parts)
     if speak:
         produced = time.perf_counter()
         batch.first_sound.add_done_callback(

@@ -67,6 +67,10 @@ class EngineService:
         self._queue.put_nowait((inp, speak, future))
         return future
 
+    def post(self, inp: EngineInput) -> None:
+        """결과를 기다리지 않고 넣는다. 처리 실패는 엔진이 로그로 남긴다."""
+        self.put(inp).add_done_callback(_drop_result)
+
     async def submit(self, inp: EngineInput, *, speak: bool = True) -> EngineResult:
         """입력을 넣고 리듀스 결과를 받는다. speak=False면 그 결과의 낭독을 바로 끝난 것으로 처리한 뒤 돌려준다."""
         result, batch = await self.put(inp, speak)
@@ -156,6 +160,11 @@ class EngineService:
             self.events.publish(type, turn_id, data)
         except Exception:
             log.exception("이벤트 발행 실패: %s", type)
+
+
+def _drop_result(future: asyncio.Future) -> None:
+    if not future.cancelled():
+        future.exception()  # 꺼내 두어야 "exception was never retrieved" 경고가 겹쳐 찍히지 않는다
 
 
 def _log_crash(task: asyncio.Task) -> None:

@@ -23,7 +23,9 @@ class Kit:
         await self._lifespan.__aenter__()
         self.parts = self.app.state.parts
         self._sub = self.parts.events.subscribe(maxsize=0)  # 0: 크기 제한 없음
-        self.http = httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url="http://kit")
+        # 처리 못 한 예외도 앱의 500 응답으로 받는다(명세 공통 오류)
+        transport = httpx.ASGITransport(app=self.app, raise_app_exceptions=False)
+        self.http = httpx.AsyncClient(transport=transport, base_url="http://kit")
         await self.settle()
         return self
 
@@ -65,6 +67,10 @@ class Kit:
     async def settle(self) -> None:
         """엔진 입력 큐가 비고 낭독 실행기가 쉬고 기다리는 되먹임이 없을 때까지. 남은 마감 시각은 기다리지 않는다."""
         await until_idle(self.parts.engine, self.parts.engine.sequencer)
+        self.drain()
+
+    def drain(self) -> None:
+        """기다리지 않고 지금까지 나온 이벤트만 모은다."""
         while not self._sub.queue.empty():
             self.events.append(self._sub.queue.get_nowait())
 
