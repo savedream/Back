@@ -78,9 +78,11 @@ def _during_switch_confirm(run: Run, fc: FunctionCall) -> None:
 
 
 def _situation_branch(run: Run, inp: FunctionCallInput, fc: FunctionCall) -> str | None:
-    """상황 설명 5번: 지금 질문의 slot 값이 함께 왔으면 그 값으로 갈 분기."""
+    """상황 설명 5번: 지금 질문의 slot 값이 함께 왔으면 그 값으로 갈 분기. 질문이 바뀌었으면 쓰지 않는다(6-1)."""
     step = current_step(run)
     if step is None or step["kind"] != "ask" or not step["slot"]:
+        return None
+    if inp.epoch != run.s.epoch or inp.step_id != run.s.step_id:
         return None
     value = getattr(fc.observation, step["slot_key"])
     return slot_branch(step, [value]) if value != -1 else None

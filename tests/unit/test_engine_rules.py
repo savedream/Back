@@ -4,7 +4,7 @@
 """
 import pytest
 
-from tests.unit.engine_kit import NO_FIX_LAST, EngineKit, assert_from_db, ids
+from tests.unit.engine_kit import NO_FIX_LAST, EngineKit, assert_from_db, ids, user_turn
 
 
 @pytest.fixture
@@ -172,6 +172,22 @@ def test_switch_no_in_observe_wait_rechecks(kit):
     assert kit.state.step_id == "MON-06"
     assert ids(kit.say("화상을 입었는데 숨은 잘 쉬어요")) == [("template", "T_SWITCH_ASK")]
     assert ids(kit.say("아니요")) == [("step", "MON-02")]  # 관찰 대기 중 호흡 값이 들어왔으니 다시 확인
+
+
+def test_situation_value_for_old_question_is_not_used_as_answer(kit):
+    kit.model.add("상황이 잘 모르겠어요",
+                  "<maum_0>(situation=-1, conscious=-1, breathing=-1, bleeding=-1, movement=-1, scene_danger=-1)<maum_end>")
+    kit.model.add("숨쉬기 힘들어해요",
+                  "<maum_0>(situation=-1, conscious=-1, breathing=2, bleeding=-1, movement=-1, scene_danger=-1)<maum_end>")
+    kit.say("상황이 잘 모르겠어요")
+    kit.say("네")
+    assert kit.state.step_id == "EM00-05"
+    stale = user_turn(kit.state, "숨쉬기 힘들어해요", kit.model, "t_old")  # 출혈 질문 때 잡힌 말
+    kit.say("아니요")
+    assert kit.state.step_id == "EM00-06"  # 숨쉬기 힘들어하나요?
+    start = len(kit.spoken)
+    kit.feed(stale)
+    assert ids(kit.spoken[start:]) == [("step", "EM00-06")]  # 바뀐 질문의 답으로 쓰지 않고 다시 묻는다
 
 
 @pytest.mark.parametrize("text, expected, speed", [
