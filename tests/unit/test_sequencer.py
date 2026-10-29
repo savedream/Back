@@ -189,3 +189,15 @@ async def test_silent_batch_has_no_sound(rig):
     batch = rig.seq.submit(result(say(1)), speak=False)
     await batch.done
     assert not batch.first_sound.done()
+
+
+async def test_stop_cancels_unanswered_device_call():
+    r = Rig()
+    r.seq.start()
+    r.devices.hang = True
+    r.seq.submit(result(device(1)))
+    while not r.devices.commands:
+        await asyncio.sleep(0)
+    pending = set(r.seq._side)
+    await r.seq.stop()
+    assert pending and all(t.done() for t in pending)

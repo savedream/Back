@@ -69,7 +69,7 @@ class Sequencer:
         self._queue: deque[_Item] = deque()
         self._current: _Item | None = None
         self._playing: asyncio.Task | None = None
-        self._side: set[asyncio.Task] = set()  # 응답을 기다리는 장치 명령·기록 저장
+        self._side: set[asyncio.Future] = set()  # 응답을 기다리는 장치 명령·기록 저장
         self._wake = asyncio.Event()
         self._shown_step: str | None = None
         self._speech: dict | None = None
@@ -147,6 +147,7 @@ class Sequencer:
         elif isinstance(action, DeviceAction):
             # 바로 앞 문장이 끝난 지금 명령을 내고(다음 문장보다 먼저), 응답은 기다리지 않는다
             call = asyncio.ensure_future(self._devices.execute(action.command))
+            self._track(call)
             self._spawn(self._device(action, call))
         elif isinstance(action, RecordAction):
             self._spawn(self._record(action))
@@ -217,8 +218,10 @@ class Sequencer:
             await self._feed(RecordSavedInput(action_id=action.action_id, ok=ok))
 
     def _spawn(self, coro) -> None:
-        task = asyncio.create_task(coro)
-        self._side.add(task)
+        self._track(asyncio.create_task(coro))
+
+    def _track(self, task: asyncio.Future) -> None:
+        self._side.add(task)  # 끝낼 때 함께 취소하고, 남아 있는 동안은 쉬는 것으로 보지 않는다
         task.add_done_callback(self._side_done)
 
     def _side_done(self, task: asyncio.Task) -> None:
