@@ -39,11 +39,13 @@ def request_device(run: Run, obj: int, typ: int, source: str) -> None:
 
 def _sound(run: Run, obj: int, on: bool, source: str) -> None:
     name, on_template, off_template = _SOUND[obj]
-    if run.s.devices[name].want == ("on" if on else "off"):
+    device = run.s.devices[name]
+    if device.want == ("on" if on else "off") and device.status != "unknown":
         run.say_template("T_DEV_ALREADY_ON" if on else "T_DEV_ALREADY_OFF")  # 켜진 기능에 켜 줘라고 해도 끄지 않음
         return
     run.say_template(on_template if on else off_template)
-    set_sound_device(run, name, on=on, source=source)
+    # 응답 실패로 확인이 안 되는(unknown) 기능은 같은 요청이어도 다시 명령한다
+    set_sound_device(run, name, on=on, source=source, force=True)
 
 
 def _no_target(run: Run, on: bool, source: str) -> bool:
@@ -130,7 +132,10 @@ def device_result(run: Run, action_id: str | None, obj: int, status: str, detail
         return
     device = run.s.devices[name]
     if status == "success":
-        device.status, device.last_result, device.last_error = device.want, "success", None
+        done = ("on" if command["type"] == 1 else "off") if command is not None else device.want
+        # 그 사이 반대 명령을 냈으면 그 응답이 올 때까지 처리 중으로 둔다
+        device.status = done if done == device.want else "pending"
+        device.last_result, device.last_error = "success", None
     elif status in ("failed", "timeout", "unavailable"):
         device.status, device.last_result = "unknown", status
         device.last_error = (detail or {}).get("message")

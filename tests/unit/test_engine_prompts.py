@@ -2,7 +2,7 @@
 import pytest
 
 from app.schemas.device import DeviceCommand
-from app.services.procedure_engine.inputs import DeviceButtonInput
+from app.services.procedure_engine.inputs import DeviceButtonInput, DeviceResultInput
 from tests.unit.engine_kit import EngineKit, ids
 
 
@@ -11,6 +11,8 @@ def kit() -> EngineKit:
     k = EngineKit()
     k.model.add("켜 줘", "<maum_4>(object=-1, type=1)<maum_end>")
     k.model.add("타이머 시작해 줘", "<maum_4>(object=3, type=1)<maum_end>")
+    k.model.add("메트로놈 켜 줘", "<maum_4>(object=2, type=1)<maum_end>")
+    k.model.add("메트로놈 꺼 줘", "<maum_4>(object=2, type=2)<maum_end>")
     k.say("등산하다 넘어졌는데 다리를 움직이기 어려워요")
     k.say("아니요 피는 안 나요")
     return k
@@ -55,3 +57,23 @@ def test_button_timer_reset_keeps_switch_confirm(kit):
     kit.say("팔에 화상을 입었어요")
     assert button(kit, 3, 4) == [("template", "T_DEV_TIMER_RESET"), ("template", "T_SWITCH_ASK")]
     assert kit.state.timer.status == "idle" and kit.state.pending_prompt.type == "switch_confirm"
+
+
+def test_failed_device_can_be_requested_again(kit):
+    kit.device_status = "timeout"
+    assert ids(kit.say("메트로놈 켜 줘"))[0] == ("template", "T_DEV_METRO_ON")
+    assert kit.state.devices["metronome"].status == "unknown"
+    kit.device_status = "success"
+    assert ids(kit.say("메트로놈 켜 줘"))[0] == ("template", "T_DEV_METRO_ON")  # '이미 켜져 있어요'가 아니라 다시 켠다
+    assert len(kit.devices) == 2 and kit.state.devices["metronome"].status == "on"
+
+
+def test_late_on_response_does_not_show_on_after_off_request(kit):
+    kit.device_status = None
+    kit.say("메트로놈 켜 줘")
+    kit.say("메트로놈 꺼 줘")
+    on, off = kit.device_actions
+    kit.feed(DeviceResultInput(action_id=on.action_id, object=2, status="success"))
+    assert kit.state.devices["metronome"].status == "pending"  # 끄기 응답을 기다리는 중
+    kit.feed(DeviceResultInput(action_id=off.action_id, object=2, status="success"))
+    assert kit.state.devices["metronome"].status == "off"

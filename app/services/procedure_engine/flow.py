@@ -188,11 +188,12 @@ def _timer_start_by_step(run: Run, step: dict) -> None:
                                   step_id=step["step_id"], detail=detail))
 
 
-def set_sound_device(run: Run, name: str, on: bool, source: str, step_id: str | None = None) -> bool:
-    """메트로놈(2)·구조신호(4) 켜기·끄기. 이미 같은 상태면 명령을 내지 않고 False."""
+def set_sound_device(run: Run, name: str, on: bool, source: str, step_id: str | None = None,
+                     force: bool = False) -> bool:
+    """메트로놈(2)·구조신호(4) 켜기·끄기. 이미 같은 상태를 요청했으면(force가 아니면) 명령을 내지 않고 False."""
     device = run.s.devices[name]
     want = "on" if on else "off"
-    if device.want == want:
+    if device.want == want and not force:
         return False
     device.want = want
     device.status = "pending"

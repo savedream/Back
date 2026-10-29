@@ -39,6 +39,8 @@ class EngineKit:
         self.say_actions: list[SayAction] = []
         self.records: list = []
         self.devices: list = []
+        self.device_actions: list[DeviceAction] = []
+        self.device_status: str | None = "success"  # None이면 장치 응답을 넣지 않는다(시험에서 직접 넣음)
         self.events: list = []
         self.state = None
         self._depth = 0
@@ -89,7 +91,10 @@ class EngineKit:
                     self.feed(PlaybackInput(action_id=action.action_id, event="finished", result="done"))
             elif isinstance(action, DeviceAction):
                 self.devices.append(action.command)
-                self.feed(DeviceResultInput(action_id=action.action_id, object=action.command.object, status="success"))
+                self.device_actions.append(action)
+                if self.device_status is not None:
+                    self.feed(DeviceResultInput(action_id=action.action_id, object=action.command.object,
+                                                status=self.device_status))
             elif isinstance(action, RecordAction):
                 self.records.append(action.record)
                 if action.wants_result:
