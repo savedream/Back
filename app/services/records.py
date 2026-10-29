@@ -15,14 +15,18 @@ class MemoryRecordStore:
 
     def __init__(self) -> None:
         self.records: list[Record] = []
-        self._failures = 0
+        self._failures: list[str | None] = []
 
-    def fail_next_save(self, times: int = 1) -> None:
-        self._failures += times
+    def fail_next_save(self, kind: str | None = None) -> None:
+        """다음 저장 하나를 실패시킨다. kind를 주면 그 종류의 다음 기록만."""
+        self._failures.append(kind)
 
     async def save(self, record: Record) -> bool:
-        ok = self._failures == 0
-        if not ok:
-            self._failures -= 1
+        ok = True
+        for i, kind in enumerate(self._failures):
+            if kind is None or kind == record.kind:
+                del self._failures[i]
+                ok = False
+                break
         self.records.append(record.model_copy(update={"saved": ok}))
         return ok
