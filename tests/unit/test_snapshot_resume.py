@@ -106,6 +106,15 @@ async def test_same_boot_resumes_from_snapshot(tmp_path):
         assert ids(await kit.advance(1)) == [("step", "EM01-10"), ("step", "EM01-11")]
 
 
+async def test_resume_before_guidance_says_welcome(tmp_path):
+    async with relaunch(tmp_path, 0) as kit:
+        before = kit.state
+        assert before.mode == "idle" and before.step_id is None
+    async with relaunch(tmp_path, 20) as kit:
+        assert kit.state.session_id == before.session_id and kit.state.previous_session_id is None
+        assert ids(kit.spoken) == [("template", "T_WELCOME")]  # 안내 전이면 T_RESUME 대신
+
+
 async def test_alert_that_ended_while_down_is_handled_at_once(tmp_path):
     before, _ = await cpr_then_power_off(tmp_path)
     async with relaunch(tmp_path, 30 + 100) as kit:  # 남은 90초보다 오래 끊김
@@ -135,20 +144,43 @@ async def test_new_session_unless_same_known_boot(tmp_path, first, second, resum
         assert kit.parts.devices.on == set() and s.alerts == [] and s.step_id is None
 
 
-def test_resume_drops_cut_reading_and_starts_its_alert_now():
+def resume_cut(kit: EngineKit):
+    """읽는 중에 끊긴 상태에서 3초 뒤 이어 간다. (이어 간 결과, 이어 가며 읽을 문장의 단계·템플릿 ID)."""
+    ctx = Ctx(db=DB, now=kit.clock.now() + 3, wall=kit.clock.wall() + timedelta(seconds=3))
+    res = resume_session(kit.state, ctx, saved_now=kit.clock.now(), downtime_s=3)
+    return res, [p.utterance.template_id or p.utterance.step_id for p in res.state.pending_says.values()]
+
+
+def test_resume_rereads_from_first_unread_step():
     kit = EngineKit()
     kit.say("사람이 쓰러졌는데 숨을 안 쉬어")
     kit.say("아니요 대답 없어요")
-    kit.hold()  # 가슴압박 안내를 읽는 중에 끊긴다
+    kit.hold()  # 가슴압박 안내(EM01-06~09)를 읽는 중에 끊긴다
     kit.say("아니요")
     before = kit.state
     assert before.alerts[0].waits_for_action in before.pending_says
-    ctx = Ctx(db=DB, now=7.0, wall=kit.clock.wall() + timedelta(seconds=3))
-    s = resume_session(before, ctx, saved_now=kit.clock.now(), downtime_s=3).state
-    assert s.alerts[0].deadline == 7.0 + 120 and s.alerts[0].waits_for_action is None  # 끊긴 문장 대신 지금부터 잰다
-    said = [p.utterance.template_id or p.utterance.step_id for p in s.pending_says.values()]
-    assert said == ["T_RESUME", before.spoken_step_id] and s.step_id == "EM01-15"
-    assert s.counters.record > before.counters.record
+    res, said = resume_cut(kit)
+    s = res.state
+    assert said == ["T_RESUME", "EM01-06", "EM01-07", "EM01-08", "EM01-09"] and s.step_id == "EM01-15"
+    reread = next(a for a, p in s.pending_says.items() if p.utterance.step_id == "EM01-09")
+    assert [(a.step_id, a.waits_for_action, a.deadline) for a in s.alerts] == [("EM01-09", reread, None)]
+    assert res.mode == "replace" and s.counters.record > before.counters.record
+
+
+def test_resume_restores_call_stack_of_first_unread_step():
+    kit = EngineKit()
+    kit.model.add("상황이 잘 모르겠어요",
+                  "<maum_0>(situation=-1, conscious=-1, breathing=-1, bleeding=-1, movement=-1, scene_danger=-1)<maum_end>")
+    kit.say("상황이 잘 모르겠어요")
+    kit.say("네")
+    kit.say("아니요")
+    kit.hold()
+    kit.say("네")  # EM00-07(119 안내로 call) → COM-119를 읽는 중에 끊긴다
+    first = next(iter(kit.state.pending_says.values()))
+    assert first.utterance.step_id == "EM00-07" and first.call_stack == [] and kit.state.call_stack
+    res, said = resume_cut(kit)
+    assert said[:2] == ["T_RESUME", "EM00-07"]
+    assert res.state.call_stack == kit.state.call_stack  # 다시 읽으며 돌아올 곳을 한 번만 쌓는다
 
 
 @pytest.mark.parametrize("broken", ["{", "unknown_step"])

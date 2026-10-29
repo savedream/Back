@@ -7,7 +7,7 @@ from app.services.procedure_engine import functions, timers
 from app.services.procedure_engine.actions import EngineResult
 from app.services.procedure_engine.context import Ctx, Run
 from app.services.procedure_engine.devices_rules import device_result, request_device
-from app.services.procedure_engine.flow import cancel_alerts, continue_from_say, set_sound_device, start_alert
+from app.services.procedure_engine.flow import cancel_alerts, continue_from_say, goto, set_sound_device, start_alert
 from app.services.procedure_engine.inputs import EngineInput
 from app.services.procedure_engine.interrupts import clear_prompt
 
@@ -78,12 +78,19 @@ def _barge_in(run: Run) -> None:
 
     끊긴 문장은 시퀀서의 cut 되먹임으로 kit_guidance(played: cut)가 남는다. 이어 가기는 사용자 입력을 처리한 뒤에 한다.
     """
+    run.preempt()
+    _back_to_unspoken(run)
+
+
+def _back_to_unspoken(run: Run) -> str | None:
+    """다 읽지 못한 첫 단계 문장(버려진 문장 제외)의 단계로 위치와 그때의 call_stack을 되돌린다. 그 단계 ID, 없으면 None."""
     unspoken = [p for p in run.s.pending_says.values()
                 if not p.dropped and p.utterance.source == "step" and p.utterance.step_id]
-    run.preempt()
-    if unspoken:
-        run.s.call_stack = list(unspoken[0].call_stack)
-        run.set_step(unspoken[0].utterance.step_id)
+    if not unspoken:
+        return None
+    run.s.call_stack = list(unspoken[0].call_stack)
+    run.set_step(unspoken[0].utterance.step_id)
+    return unspoken[0].utterance.step_id
 
 
 def new_session(ctx: Ctx, previous: SessionState | None = None, turn_id: str | None = None,
@@ -121,11 +128,14 @@ def resume_session(state: SessionState, ctx: Ctx, saved_now: float, downtime_s: 
 
     엔진 시계의 시각(알림 마감, 타이머 구간 시작, GPS 재시도 마감)은 저장 시각 기준 남은 시간에서 끊긴 시간(downtime_s)을
     뺀 만큼으로 옮긴다. 끊긴 동안 끝난 알림은 마감이 이미 지나 다음 Tick에서 바로 처리된다. 읽던 문장·말소리·확인 질문·
-    응답을 기다리던 장치 명령과 무응답·대기 마감은 버리고(현재 단계를 다시 읽으면 sync_timers가 다시 건다), 켜져 있던
-    메트로놈·구조신호는 다시 켠다(재연결 때 자동으로 울리지 않는 규칙의 예외). T_RESUME 뒤에 현재 단계를 다시 읽는다.
+    응답을 기다리던 장치 명령과 무응답·대기 마감은 버리고(다시 읽으면 sync_timers가 다시 건다), 켜져 있던
+    메트로놈·구조신호는 다시 켠다(재연결 때 자동으로 울리지 않는 규칙의 예외). T_RESUME 뒤에, 다 읽지 못한 단계 문장이
+    있었으면 말하기 버튼처럼 그 첫 단계로 되돌려 거기부터 읽고, 없으면 현재 단계를 다시 읽는다.
+    안내 시작 전(현재 단계 없음, idle)이면 T_RESUME 대신 T_WELCOME을 읽는다.
     """
     run = Run(state, ctx, None)
     s, shift = run.s, ctx.now - downtime_s - saved_now
+    unspoken_step = _back_to_unspoken(run)
     for alert in s.alerts:
         if alert.deadline is not None:
             alert.deadline += shift
@@ -143,8 +153,14 @@ def resume_session(state: SessionState, ctx: Ctx, saved_now: float, downtime_s: 
     for name in ("metronome", "rescue_signal"):
         if s.devices[name].want == "on":
             set_sound_device(run, name, on=True, source="engine", force=True)
-    run.say_template("T_RESUME")
-    functions.repeat(run, 2, 0)  # ask면 질문, wait면 마지막으로 읽은 단계
-    continue_from_say(run)  # say 단계(말하기 버튼으로 되돌아온 곳)면 그 단계부터
+    if s.step_id is None and s.mode == "idle":
+        run.say_template("T_WELCOME")
+    else:
+        run.say_template("T_RESUME")
+    if unspoken_step is not None:
+        goto(run, unspoken_step)
+    else:
+        functions.repeat(run, 2, 0)  # ask면 질문, wait면 마지막으로 읽은 단계
+        continue_from_say(run)  # say 단계(말하기 버튼으로 되돌아온 곳)면 그 단계부터
     timers.sync_timers(run)
     return run.result()
