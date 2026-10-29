@@ -29,6 +29,17 @@ def _can_listen(run: Run) -> bool:
                 or s.speech_active)
 
 
+def listen_state(state: SessionState) -> dict:
+    """낭독이 끝난 뒤의 듣기 상태(speech.state 이벤트 data)."""
+    if not state.mic.connected:
+        return {"state": "unavailable"}
+    if state.devices["rescue_signal"].want == "on":
+        return {"state": "blocked", "reason": "rescue_signal"}
+    if state.mic.paused:
+        return {"state": "paused"}
+    return {"state": "armed"}
+
+
 def arm_no_speech(run: Run) -> None:
     step = current_step(run)
     if step is None or step["kind"] != "ask" or not _can_listen(run):
