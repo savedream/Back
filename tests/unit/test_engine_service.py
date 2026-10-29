@@ -5,6 +5,8 @@
 import pytest
 
 from app.services.procedure_engine import service as service_module
+from app.services.procedure_engine.actions import EngineResult
+from app.services.procedure_engine.inputs import SpeechActivityInput
 from tests.unit.engine_kit import ids
 from tests.unit.shell_kit import ShellKit, until_idle, until_speaking
 
@@ -115,6 +117,13 @@ async def test_s12_compression_alert_wakes_engine(kit):
     assert [e.data["reason"] for e in kit.events[mark:] if e.type == "alert.ended"] == ["timeout"]
 
 
+async def test_alert_during_speech_does_not_freeze_engine(kit):
+    await at_s5b(kit)
+    await kit.engine.submit(SpeechActivityInput(state="started"))
+    assert await kit.advance(130) == []  # 엔진이 같은 마감으로 계속 깨어나면 settle이 끝나지 않는다
+    assert ids(await kit.say("네")) == [("step", "EM01-10"), ("step", "EM01-11")]
+
+
 async def test_speak_false_returns_after_alert_started(kit):
     await kit.say("사람이 쓰러졌는데 숨을 안 쉬어")
     await kit.say("아니요 대답 없어요")
@@ -162,17 +171,33 @@ async def test_failed_input_does_not_stop_engine(kit, monkeypatch):
     assert ids(await kit.say("등산하다 넘어졌는데 다리를 움직이기 어려워요")) == [("intro", "EM-03"), ("step", "EM03-01")]
 
 
-async def test_failed_tick_is_not_retried_in_a_loop(kit, monkeypatch):
+async def test_failed_tick_skips_only_that_deadline(kit, monkeypatch):
     await at_s1b(kit)
     real_reduce = service_module.reduce
+    failures = []
 
-    def broken(state, inp, ctx):
-        if inp.kind == "tick":
+    def broken_once(state, inp, ctx):
+        if inp.kind == "tick" and not failures:
+            failures.append(ctx.now)
             raise RuntimeError("시험용 오류")
         return real_reduce(state, inp, ctx)
 
-    monkeypatch.setattr(service_module, "reduce", broken)
-    mark = len(kit.speaker.spoken)
-    kit.clock.advance(15)
-    await until_idle(kit.engine, kit.engine.sequencer)  # 같은 마감으로 계속 깨어나면 여기서 끝나지 않는다
-    assert kit.state.step_id == "EM03-04" and len(kit.speaker.spoken) == mark
+    monkeypatch.setattr(service_module, "reduce", broken_once)
+    assert await kit.advance(15) == []  # 같은 마감으로 계속 깨어나면 settle이 끝나지 않는다
+    assert failures == [15]
+    await kit.say("다시 말해 줘")
+    assert ids(await kit.advance(15)) == [("template", "T_NO_SPEECH"), ("step", "EM03-04")]  # 다른 마감은 그대로
+
+
+async def test_tick_that_changes_nothing_is_not_repeated(kit, monkeypatch):
+    await at_s1b(kit)
+    real_reduce = service_module.reduce
+
+    def stuck(state, inp, ctx):
+        if inp.kind == "tick":
+            return EngineResult(turn_id=None, state=state)
+        return real_reduce(state, inp, ctx)
+
+    monkeypatch.setattr(service_module, "reduce", stuck)
+    assert await kit.advance(15) == []
+    await until_idle(kit.engine, kit.engine.sequencer)

@@ -138,6 +138,14 @@ def test_s12_compression_alert(kit):
     assert ids(kit.advance(1)) == [("step", "EM01-10"), ("step", "EM01-11")]
 
 
+def test_alert_waits_until_speech_turn_ends(kit):
+    at_s5b(kit)
+    kit.speech("started")
+    assert kit.advance(130) == []  # 말소리를 받는 중에는 알림을 그 턴이 끝난 뒤로 미룬다
+    kit.say("네")
+    assert ids(kit.advance(0)) == [("step", "EM01-10"), ("step", "EM01-11")]
+
+
 def test_s14_no_switch_during_compression(kit):
     at_s5b(kit)
     ends = kit.state.alerts[0].deadline

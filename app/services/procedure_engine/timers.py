@@ -11,15 +11,21 @@ from app.services.procedure_engine.interrupts import finish_timer_reset, prompt_
 from app.services.procedure_engine.templates import read_coordinate
 
 
-def next_deadline(state: SessionState) -> float | None:
-    """셸이 다음에 깨어날 시각."""
-    candidates = [a.deadline for a in state.alerts if a.deadline is not None]
+def deadlines(state: SessionState) -> list[float]:
+    """지금 걸린 마감 시각들. 말소리를 받는 중에는 절차 알림을 그 턴이 끝난 뒤로 미루므로 빼 둔다(6-12)."""
+    found = [] if state.speech_active else [a.deadline for a in state.alerts if a.deadline is not None]
     if state.pending_prompt is not None and state.pending_prompt.deadline is not None:
-        candidates.append(state.pending_prompt.deadline)
+        found.append(state.pending_prompt.deadline)
     for d in (state.no_speech.deadline, state.wait_deadline, state.gps_retry and state.gps_retry.give_up_at):
         if d is not None:
-            candidates.append(d)
-    return min(candidates) if candidates else None
+            found.append(d)
+    return found
+
+
+def next_deadline(state: SessionState) -> float | None:
+    """셸이 다음에 깨어날 시각."""
+    found = deadlines(state)
+    return min(found) if found else None
 
 
 def _can_listen(run: Run) -> bool:

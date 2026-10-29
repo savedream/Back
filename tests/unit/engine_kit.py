@@ -17,7 +17,7 @@ from app.services.procedure_engine.core import new_session, reduce
 from app.services.procedure_engine.engine_constants import PROGRESS_PHRASES
 from app.services.procedure_engine.inputs import (
     DeviceResultInput, FunctionCallInput, ModelErrorInput, PlaybackInput, ProgressPhraseInput, RecordSavedInput,
-    TickInput,
+    SpeechActivityInput, TickInput,
 )
 from app.services.procedure_engine.timers import next_deadline
 
@@ -72,9 +72,14 @@ class EngineKit:
     def advance(self, seconds: float) -> list[Utterance]:
         start = len(self.spoken)
         self.clock.advance(seconds)
-        while (d := next_deadline(self.state)) is not None and d <= self.clock.now():
+        for _ in range(100):
+            if (d := next_deadline(self.state)) is None or d > self.clock.now():
+                return self.spoken[start:]
             self.feed(TickInput())
-        return self.spoken[start:]
+        raise AssertionError("같은 마감으로 계속 깨어남")
+
+    def speech(self, state: str) -> None:
+        self.feed(SpeechActivityInput(state=state))
 
 
 def user_turn(state: SessionState, text: str, model: FakeModel, turn_id: str):

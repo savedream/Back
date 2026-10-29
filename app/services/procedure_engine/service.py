@@ -17,7 +17,7 @@ from app.services.procedure_engine.context import Ctx
 from app.services.procedure_engine.core import new_session, reduce
 from app.services.procedure_engine.inputs import EngineInput, TickInput
 from app.services.procedure_engine.sequencer import Batch, Sequencer
-from app.services.procedure_engine.timers import next_deadline
+from app.services.procedure_engine.timers import deadlines
 from app.services.procedure_engine.view import session_changes
 from app.services.records import RecordSink
 from app.services.tts import Speaker
@@ -38,7 +38,7 @@ class EngineService:
                                    device_timeout_s)
         self._queue: asyncio.Queue[tuple[EngineInput, bool, asyncio.Future]] = asyncio.Queue()
         self._pending = 0  # 넣었지만 아직 리듀스하지 않은 입력
-        self._failed_deadline: float | None = None
+        self._skipped: set[float] = set()  # 처리하지 못한 마감. 같은 마감으로 계속 깨어나지 않게 건너뛴다
         self._task: asyncio.Task | None = None
 
     async def start(self) -> None:
@@ -47,6 +47,7 @@ class EngineService:
         ctx = self._ctx()
         self._apply(None, new_session(ctx), ctx, speak=True)
         self._task = asyncio.create_task(self._run())
+        self._task.add_done_callback(_log_crash)
 
     async def stop(self) -> None:
         if self._task is not None:
@@ -77,14 +78,19 @@ class EngineService:
         return Ctx(db=self.db, now=self.clock.now(), wall=self.clock.wall(), location=self._location())
 
     def _deadline(self) -> float | None:
-        deadline = next_deadline(self.state) if self.state is not None else None
-        return None if deadline == self._failed_deadline else deadline
+        if self.state is None:
+            return None
+        live = deadlines(self.state)
+        self._skipped &= set(live)
+        rest = [d for d in live if d not in self._skipped]
+        return min(rest) if rest else None
 
     async def _run(self) -> None:
         while True:
             deadline = self._deadline()
             if deadline is not None and deadline <= self.clock.now():
                 self._step(TickInput(), True, None)
+                await asyncio.sleep(0)  # 마감이 몰려도 다른 입력·낭독에 차례를 준다
                 continue
             getter = asyncio.ensure_future(self._queue.get())
             waiters = {getter}
@@ -105,16 +111,20 @@ class EngineService:
 
     def _step(self, inp: EngineInput, speak: bool, future: asyncio.Future | None) -> None:
         before, ctx = self.state, self._ctx()
+        due = {d for d in deadlines(before) if d <= ctx.now} if inp.kind == "tick" else set()
         try:
             result = reduce(before, inp, ctx)
+            batch = self._apply(before, result, ctx, speak)
         except Exception as e:
             log.exception("엔진 입력 처리 실패: %s", inp.kind)
-            if future is None:
-                self._failed_deadline = next_deadline(before)  # 같은 마감 시각으로 계속 깨어나지 않게
-            elif not future.done():
+            self._skipped |= due
+            if future is not None and not future.done():
                 future.set_exception(e)
             return
-        batch = self._apply(before, result, ctx, speak)
+        if due and result.state == before:
+            # 지난 마감을 처리했는데 아무것도 바뀌지 않았으면 다음에도 같다. 엔진 버그로 보고 그 마감만 건너뛴다
+            log.error("지난 마감을 처리하지 못함: %s", sorted(due))
+            self._skipped |= due
         if future is not None and not future.done():
             future.set_result((result, batch))
 
@@ -129,3 +139,8 @@ class EngineService:
         for e in (e for e in events if e.type != "turn.result"):
             self.events.publish(e.type, result.turn_id, e.data)
         return self.sequencer.submit(result, speak)
+
+
+def _log_crash(task: asyncio.Task) -> None:
+    if not task.cancelled() and task.exception() is not None:
+        log.critical("엔진 태스크가 멈춤", exc_info=task.exception())
