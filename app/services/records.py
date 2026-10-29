@@ -166,14 +166,15 @@ class SqliteRecordStore:
             except ValueError:
                 log.exception("상태 스냅샷을 읽지 못함")
 
-    async def resume_session(self, session_id: str) -> None:
-        """이어 가는 세션(6-14)의 지난 기록을 SQLite에서 읽어 이 프로세스의 세션으로 둔다(세션 기록이 끊기기 전부터 이어지게)."""
+    async def resume_session(self, session_id: str) -> list[Record]:
+        """이어 가는 세션(6-14)의 지난 기록을 SQLite에서 읽어 이 프로세스의 세션으로 두고 돌려준다(세션 기록이 끊기기 전부터 이어지게)."""
         try:
-            earlier = await self.run(partial(_load_records, session_id=session_id))
+            earlier = await self.run(partial(_load_records, session_id=session_id)) or []
         except Exception:
             log.exception("이어 가는 세션의 지난 기록을 읽지 못함: %s", session_id)
-            return
-        self._sessions[session_id] = (earlier or []) + self._sessions.get(session_id, [])
+            return []
+        self._sessions[session_id] = earlier + self._sessions.get(session_id, [])
+        return earlier
 
     def session_ids(self) -> frozenset[str]:
         """이미 쓴 세션 ID. 엔진이 새 세션 ID를 겹치지 않게 고르는 데 쓴다."""

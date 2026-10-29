@@ -208,3 +208,17 @@ async def test_unusable_snapshot_opens_new_session(tmp_path, broken):
     async with relaunch(tmp_path, 40) as kit:  # 읽지 못하거나 이어 가지 못하면 새 세션
         assert kit.state.session_id == before.session_id + "_2" and kit.state.previous_session_id == before.session_id
         assert ids(kit.spoken) == [("template", "T_WELCOME")]
+
+
+async def test_resume_skips_record_numbers_already_saved(tmp_path):
+    before, numbers = await cpr_then_power_off(tmp_path)
+    # 비정상 종료 직전에 스냅샷이 마지막 기록보다 늦게 저장된 경우를 만든다(기록 번호가 뒤처진 스냅샷)
+    stale = before.model_copy(update={"counters": before.counters.model_copy(update={"record": 3})})
+    conn = sqlite3.connect(tmp_path / "records.db")
+    conn.execute("UPDATE snapshots SET json = ?", (stale.model_dump_json(),))
+    conn.commit()
+    conn.close()
+    async with relaunch(tmp_path, 40) as kit:
+        assert kit.state.session_id == before.session_id
+        assert min(int(r.record_id[2:]) for r in kit.records) > max(numbers)  # 이미 저장된 번호와 겹치지 않는다
+        assert kit.parts.records.unsaved() == []

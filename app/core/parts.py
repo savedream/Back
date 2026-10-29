@@ -1,5 +1,5 @@
 """부품 조립: 지금은 가짜 부품(모델·기기·GPS·스피커)으로 엔진을 꾸린다. 실제 부품은 키트 단계에서 같은 자리(Protocol)에 끼운다."""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from app.config import Settings
@@ -12,7 +12,8 @@ from app.services.manual_db import ManualDB
 from app.services.procedure_engine.clock import Clock
 from app.services.procedure_engine.inputs import LocationUpdateInput
 from app.services.procedure_engine.service import EngineService
-from app.services.records import SqliteRecordStore
+from app.schemas.record import Record
+from app.services.records import Snapshot, SqliteRecordStore
 
 _FAKE_FLAGS = ("fake_model", "fake_devices", "fake_audio", "fake_gps")
 
@@ -37,8 +38,18 @@ class Parts:
         if snap is None or not self.resume_from_snapshot or self.boot_id is None or snap.boot_id != self.boot_id:
             snap = None
         else:
-            await self.records.resume_session(snap.state.session_id)
+            earlier = await self.records.resume_session(snap.state.session_id)
+            snap = _catch_up_record_counter(snap, earlier)
         await self.engine.start(previous_session_id=self.records.last_session_id, snapshot=snap)
+
+
+def _catch_up_record_counter(snap: Snapshot, earlier: list[Record]) -> Snapshot:
+    """비정상 종료 직전에 스냅샷이 마지막 기록보다 늦게 저장됐으면 기록 번호를 이미 저장된 번호 뒤로 맞춘다(번호 겹침 방지)."""
+    last = max((int(r.record_id.rsplit("_", 1)[1]) for r in earlier), default=0)
+    if last <= snap.state.counters.record:
+        return snap
+    counters = snap.state.counters.model_copy(update={"record": last})
+    return replace(snap, state=snap.state.model_copy(update={"counters": counters}))
 
 
 def read_boot_id(path: Path) -> str | None:
