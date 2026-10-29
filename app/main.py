@@ -6,11 +6,12 @@ from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI
 
-from app.api import system
+from app.api import system, utterances
 from app.common.handlers import install_error_handlers
 from app.config import Settings, get_settings
 from app.core.parts import build_parts
 from app.core.readiness import Component, Readiness
+from app.core.turn import TurnLock
 from app.services.manual_db import load_manual_db
 from app.services.procedure_engine.clock import Clock, SystemClock
 
@@ -45,11 +46,13 @@ def create_app(settings: Settings | None = None, *, clock: Clock | None = None) 
     )
     app.state.settings = settings
     app.state.readiness = Readiness()
+    app.state.turn_lock = TurnLock()
     install_error_handlers(app)
 
     # 인증 없음: 화면은 키트가 만든 전용 Wi-Fi(AP)에서만 접속하고, 접근은 Wi-Fi 비밀번호로 막는다
     api = APIRouter(prefix="/api")
     api.include_router(system.router)
+    api.include_router(utterances.router)
     app.include_router(api)
     return app
 

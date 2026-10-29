@@ -1,6 +1,6 @@
-"""텍스트 한 턴: ③ 정규화 → ④ 모델 → ⑤ 파서 (엔진에 넘기기 직전까지).
+"""한 턴: ③ 정규화 → ④ 모델 → ⑤ 파서 → ⑥ 엔진.
 
-명세서: /api/utterances는 ③부터 음성 턴과 같은 코드 경로를 탄다. 음성 턴도 STT 뒤에 이 함수를 쓴다.
+명세서: /api/utterances는 ③부터 음성 턴과 같은 코드 경로를 탄다. 음성 턴도 STT 뒤에 이 함수들을 쓴다.
 """
 import asyncio
 import logging
@@ -12,11 +12,18 @@ from pydantic import BaseModel
 
 from app.common.error_code import ErrorCode
 from app.common.exceptions import AppError
+from app.core.parts import Parts
 from app.schemas.function_call import FunctionCall
 from app.schemas.turn import NormalizedText
+from app.schemas.utterance import Utterance
+from app.services.events import EventSink
 from app.services.model_runner import ModelRunner
 from app.services.normalizer import normalize
 from app.services.output_parser import ModelOutputError, parse
+from app.services.procedure_engine.actions import SayAction
+from app.services.procedure_engine.functions import is_progress_phrase
+from app.services.procedure_engine.inputs import FunctionCallInput, ModelErrorInput, ProgressPhraseInput
+from app.services.procedure_engine.timers import listen_state
 
 log = logging.getLogger(__name__)
 
@@ -99,3 +106,67 @@ class TurnLock:
             yield f"t_{self._count:04d}"
         finally:
             self._busy = False
+
+
+class UtteranceReply(BaseModel):
+    """POST /api/utterances 응답 data. say는 이 입력 하나의 엔진 결과(다음 ask·wait까지), step_id는 처리 뒤 엔진 위치."""
+
+    turn_id: str
+    normalized: str
+    raw: str | None  # 모델까지 가지 않았으면 None
+    function_call: FunctionCall | None
+    error_code: ErrorCode | None
+    say: list[Utterance]
+    step_id: str | None
+    latency_ms: dict[str, int]
+
+
+_LATENCY_KEYS = ("vad_tail", "stt", "normalize", "model", "parse", "engine")
+
+
+async def run_utterance(parts: Parts, model_timeout_s: float, turn_id: str, text: str, speak: bool) -> UtteranceReply:
+    """문장 하나로 한 턴을 처리한다. speak=False면 낭독 대신 바로 끝난 것으로 처리한 뒤(알림 시작 시각까지 반영) 돌려주고,
+    speak=True면 엔진 결과가 나오면 바로 돌려준다(낭독은 기다리지 않음)."""
+    engine, sequencer = parts.engine, parts.engine.sequencer
+    started = time.perf_counter()
+    sequencer.set_speech_state("processing")
+    latency: dict[str, int] = {}
+    normalized = normalize(text)
+    latency["normalize"] = _elapsed_ms(started)
+    state = engine.state  # 말소리가 잡힌 시점의 위치를 들고 간다(6-1)
+    base = {"turn_id": turn_id, "epoch": state.epoch, "step_id": state.step_id, "text": text,
+            "normalized": normalized.text}
+    raw = function_call = error_code = None
+    if is_progress_phrase(engine.db, state, normalized.text):
+        inp = ProgressPhraseInput(**base)  # 대기 단계의 진행 표현은 모델을 건너뛴다(6-8)
+    else:
+        outcome = await interpret(turn_id, normalized, parts.model, model_timeout_s, latency)
+        raw, function_call, error_code = outcome.raw, outcome.function_call, outcome.error_code
+        inp = (FunctionCallInput(**base, function_call=function_call) if function_call is not None
+               else ModelErrorInput(**base, error_code=error_code))
+    start = time.perf_counter()
+    result, batch = await engine.put(inp, speak)
+    latency["engine"] = _elapsed_ms(start)
+    say = [a.utterance for a in result.actions if isinstance(a, SayAction)]
+    if not say:
+        sequencer.set_speech_state(**listen_state(engine.state))  # 읽을 문장이 없으면 바로 듣기로
+    if speak:
+        produced = time.perf_counter()
+        batch.first_sound.add_done_callback(
+            lambda sound: _report_latency(parts.events, turn_id, latency, started, produced, sound))
+    else:
+        await batch.done
+    return UtteranceReply(turn_id=turn_id, normalized=normalized.text, raw=raw, function_call=function_call,
+                          error_code=error_code, say=say, step_id=result.state.step_id, latency_ms=latency)
+
+
+def _report_latency(events: EventSink, turn_id: str, latency: dict[str, int], started: float, produced: float,
+                    sound: asyncio.Future) -> None:
+    """턴의 첫 소리가 나간 직후 turn.latency. 텍스트 턴은 vad_tail·stt가 없다(None)."""
+    if sound.cancelled():
+        return
+    at = sound.result()
+    data = {key: latency.get(key) for key in _LATENCY_KEYS}
+    data["tts_first"] = max(0, round((at - produced) * 1000))
+    data["e2e"] = round((at - started) * 1000)
+    events.publish("turn.latency", turn_id, data)
