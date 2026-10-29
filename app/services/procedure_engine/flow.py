@@ -107,12 +107,7 @@ def goto(run: Run, step_id: str) -> None:
             step_id = frame.return_to
         elif kind == "wait":
             run.set_step(step_id)
-            run.s.awaiting_question = None
-            if step["wait_timeout_s"] and run.s.wait_timeouts.get(step_id, 0) < C.WAIT_TIMEOUT_MAX:
-                if run.s.pending_says:
-                    run.s.wait_waits_for = next(reversed(run.s.pending_says))
-                else:
-                    run.s.wait_deadline = run.ctx.now + step["wait_timeout_s"]
+            run.s.wait_deadline = None  # 대기 시간은 이 단계 문장을 다 읽은 뒤부터(sync_timers)
             return
         else:
             raise ValueError(f"알 수 없는 단계 종류 {kind}")
@@ -128,7 +123,7 @@ def ask(run: Run, step: dict, speed: int = 0) -> None:
     if not run.s.mic.connected and not run.s.mic.error_announced:
         run.say_template("T_MIC_ERROR")  # 마이크가 없어진 뒤 첫 질문 전에 한 번(6-9)
         run.s.mic.error_announced = True
-    run.s.awaiting_question = run.say_step(step, "question", speed)
+    run.say_step(step, "question", speed)
 
 
 def ask_again(run: Run) -> None:

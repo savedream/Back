@@ -207,10 +207,7 @@ def repeat(run: Run, scope: int, speed: int) -> None:
         last = run.s.last_utterance
         if last is None:
             return
-        action_id = run.say_utterance(last.model_copy(update={"utterance_id": run.next_id("utterance", "u"),
-                                                              "speed": speed}))
-        if last.role == "question" and last.step_id == run.s.step_id:
-            run.s.awaiting_question = action_id
+        run.say_utterance(last.model_copy(update={"utterance_id": run.next_id("utterance", "u"), "speed": speed}))
         return
     step = current_step(run)
     if step is not None and step["kind"] == "ask":

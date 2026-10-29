@@ -46,13 +46,33 @@ def listen_state(state: SessionState) -> dict:
     return {"state": "armed"}
 
 
-def arm_no_speech(run: Run) -> None:
+def sync_timers(run: Run) -> None:
+    """입력 하나를 처리한 끝에 확인 질문·무응답·대기 마감을 상태에 맞춘다(6-7·6-8·6-9).
+
+    마감을 지우는 곳은 여럿이어도 다시 거는 곳은 여기 하나다. 읽을 문장이 남았거나 말소리를 받는 중이면 멈추고,
+    끝나면 처음부터 다시 잰다.
+    """
+    s, now = run.s, run.ctx.now
     step = current_step(run)
-    if step is None or step["kind"] != "ask" or not _can_listen(run):
-        return
-    # 마이크가 없으면 재질문 없이 낭독 5초 뒤 on_unknown
-    wait = C.NO_SPEECH_S if run.s.mic.connected else C.MIC_MISSING_ADVANCE_S
-    run.s.no_speech.deadline = run.ctx.now + wait
+    quiet = not s.pending_says and not s.speech_active
+    prompt = s.pending_prompt
+    if prompt is not None:
+        if quiet and prompt.waits_for_action is None:  # 확인 질문을 다 읽은 뒤부터 15초
+            prompt.deadline = prompt.deadline if prompt.deadline is not None else now + C.PROMPT_TIMEOUT_S
+        else:
+            prompt.deadline = None
+    if step is not None and step["kind"] == "ask" and quiet and _can_listen(run):
+        if s.no_speech.deadline is None:
+            # 마이크가 없으면 재질문 없이 낭독 5초 뒤 on_unknown
+            s.no_speech.deadline = now + (C.NO_SPEECH_S if s.mic.connected else C.MIC_MISSING_ADVANCE_S)
+    else:
+        s.no_speech.deadline = None
+    if (step is not None and step["kind"] == "wait" and step["wait_timeout_s"] and quiet
+            and s.wait_timeouts.get(step["step_id"], 0) < C.WAIT_TIMEOUT_MAX):
+        if s.wait_deadline is None:
+            s.wait_deadline = now + step["wait_timeout_s"]
+    else:
+        s.wait_deadline = None
 
 
 def handle_playback(run: Run, action_id: str, event: str, result: str | None) -> None:
@@ -65,21 +85,12 @@ def handle_playback(run: Run, action_id: str, event: str, result: str | None) ->
                                      played=result or "done"))
         if utterance.source == "step" and utterance.step_id:
             run.s.spoken_step_id = utterance.step_id
-    if action_id == run.s.awaiting_question:
-        run.s.awaiting_question = None
-        arm_no_speech(run)
     for alert in run.s.alerts:
         if alert.waits_for_action == action_id:
             start_alert(run, alert)  # 그 단계 문장의 낭독이 끝난 시각부터 잰다
     prompt = run.s.pending_prompt
     if prompt is not None and prompt.waits_for_action == action_id:
-        prompt.waits_for_action = None
-        prompt.deadline = run.ctx.now + C.PROMPT_TIMEOUT_S
-    if action_id == run.s.wait_waits_for:
-        run.s.wait_waits_for = None
-        step = current_step(run)
-        if step is not None and step["kind"] == "wait" and step["wait_timeout_s"]:
-            run.s.wait_deadline = run.ctx.now + step["wait_timeout_s"]
+        prompt.waits_for_action = None  # 확인 질문을 다 읽음. 15초는 sync_timers가 건다
 
 
 def handle_tick(run: Run) -> None:
@@ -128,21 +139,12 @@ def handle_tick(run: Run) -> None:
 
 
 def handle_speech(run: Run, state: str) -> None:
-    s = run.s
+    """말소리가 잡히면 턴 처리가 끝날 때까지 타이머를 멈춘다. ended 뒤에는 턴 입력(함수 호출·해석 실패·진행 표현)이
+    반드시 온다(턴 파이프라인 계약). 턴 없이 끝나면 cancelled가 온다."""
     if state == "started":
-        s.speech_active = True
-        s.no_speech.deadline = None
-        s.wait_deadline = None
-        return
-    s.speech_active = False
-    if state == "cancelled":
-        # 턴 없이 끝났으면 멈춘 타이머를 다시 잰다
-        step = current_step(run)
-        if step is not None and step["kind"] == "ask" and s.awaiting_question is None:
-            arm_no_speech(run)
-        elif step is not None and step["kind"] == "wait" and step["wait_timeout_s"] \
-                and s.wait_timeouts.get(step["step_id"], 0) < C.WAIT_TIMEOUT_MAX:
-            s.wait_deadline = run.ctx.now + step["wait_timeout_s"]
+        run.s.speech_active = True
+    elif state == "cancelled":
+        run.s.speech_active = False
 
 
 def handle_mic(run: Run, connected: bool | None, paused: bool | None) -> None:
@@ -152,9 +154,7 @@ def handle_mic(run: Run, connected: bool | None, paused: bool | None) -> None:
         mic.error_announced = False
     if paused is not None:
         mic.paused = paused
-    run.s.no_speech.deadline = None
-    if run.s.awaiting_question is None:
-        arm_no_speech(run)
+    run.s.no_speech.deadline = None  # 마이크 상태에 맞는 길이로 다시 잰다
 
 
 def handle_location(run: Run) -> None:

@@ -2,12 +2,14 @@
 
 리듀서 수준 시나리오(test_engine_rules.py)와 같은 결과가 비동기 셸을 거쳐서도 나오는지 본다.
 """
+import asyncio
+
 import pytest
 
 from app.services.procedure_engine import service as service_module
 from app.services.procedure_engine.actions import EngineResult
-from app.services.procedure_engine.inputs import SpeechActivityInput
-from tests.unit.engine_kit import ids
+from app.services.procedure_engine.inputs import LocationUpdateInput, SpeechActivityInput
+from tests.unit.engine_kit import FIX, ids
 from tests.unit.shell_kit import ShellKit, until_idle, until_speaking
 
 
@@ -122,6 +124,31 @@ async def test_alert_during_speech_does_not_freeze_engine(kit):
     await kit.engine.submit(SpeechActivityInput(state="started"))
     assert await kit.advance(130) == []  # 엔진이 같은 마감으로 계속 깨어나면 settle이 끝나지 않는다
     assert ids(await kit.say("네")) == [("step", "EM01-10"), ("step", "EM01-11")]
+
+
+async def test_late_gps_is_not_cut_by_no_speech():
+    kit = ShellKit(location=None)
+    await kit.start()
+    try:
+        await kit.say("사람이 쓰러졌는데 숨을 안 쉬어")
+        assert ("template", "T_GPS_WAIT") in ids(await kit.say("아니요 대답 없어요"))
+        await kit.advance(12)
+        kit.location = FIX
+        kit.speaker.hold()
+        already = len(kit.speaker.spoken)
+        await kit.engine.submit(LocationUpdateInput(location=FIX))
+        await until_speaking(kit.speaker, already)  # 늦게 잡힌 좌표를 읽는 중
+        kit.clock.advance(3)  # 질문 낭독 끝에서 15초가 되는 시각
+        for _ in range(50):
+            await asyncio.sleep(0)
+        kit.speaker.release()
+        await kit.settle()
+        played = [(r.utterance.template_id or r.utterance.step_id, r.played) for r in kit.records.records
+                  if r.kind == "kit_guidance"]
+        assert played[-1] == ("T_GPS_OK", "done")  # 낭독 중에는 무응답 타이머가 멈춘다
+        assert ids(await kit.advance(15)) == [("template", "T_NO_SPEECH"), ("step", "EM01-05")]
+    finally:
+        await kit.stop()
 
 
 async def test_speak_false_returns_after_alert_started(kit):

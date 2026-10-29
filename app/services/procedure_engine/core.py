@@ -46,6 +46,7 @@ def reduce(state: SessionState, inp: EngineInput, ctx: Ctx) -> EngineResult:
         return new_session(ctx, previous=state, turn_id=inp.turn_id)
     else:
         raise ValueError(f"모르는 엔진 입력 {kind}")
+    timers.sync_timers(run)
     return run.result()
 
 
@@ -54,7 +55,6 @@ def _barge_in(run: Run) -> None:
     unspoken = [p.utterance.step_id for p in run.s.pending_says.values()
                 if p.utterance.source == "step" and p.utterance.step_id]
     run.s.pending_says = {}
-    run.s.awaiting_question = None
     run.preempt()
     if unspoken:
         run.set_step(unspoken[0])

@@ -61,8 +61,8 @@ class PendingPrompt(BaseModel):
     origin_step_id: str | None
     target_manual_id: str | None = None  # switch_confirm의 새 매뉴얼
     deferred_branch: FunctionCall | None = None  # switch_confirm에 아니요면 이 입력으로 현재 질문 분기를 이어 감
-    deadline: float | None = None  # 15초 무응답 마감
-    waits_for_action: str | None = None  # 확인 질문 낭독이 끝나면 deadline을 건다
+    deadline: float | None = None  # 15초 무응답 마감. 확인 질문을 다 읽고 조용해지면 건다
+    waits_for_action: str | None = None  # 아직 다 읽지 않은 확인 질문 say 액션
 
 
 class PendingSay(BaseModel):
@@ -143,8 +143,6 @@ class SessionState(BaseModel):
     wait_timeouts: dict[str, int] = {}  # 대기 단계별 시간 초과로 넘어간 횟수(세 번이면 그 뒤로는 기다리기만)
     last_utterance: Utterance | None = None  # 반복 요청 scope 1 대상
     pending_says: dict[str, PendingSay] = {}  # 낭독이 아직 안 끝난 say 액션(action_id → 문장), 순서 유지
-    awaiting_question: str | None = None  # 현재 질문을 읽는 say 액션. 낭독이 끝나면 무응답 15초를 잰다
-    wait_waits_for: str | None = None  # 대기 시간이 있는 wait: 이 say 낭독이 끝나면 wait_deadline을 건다
     speech_active: bool = False  # 말소리를 받는 중(무응답·대기 타이머 정지, 알림 미룸)
     timer_reset_record: str | None = None  # 타이머 초기화 전에 저장 중인 기록 액션
     pending_devices: dict[str, dict] = {}  # 응답을 기다리는 장치 명령(action_id → object·type·source·step_id)

@@ -78,6 +78,9 @@ class EngineKit:
             self.feed(TickInput())
         raise AssertionError("같은 마감으로 계속 깨어남")
 
+    def db_step(self, step_id: str) -> dict:
+        return DB.steps_by_id[step_id]
+
     def speech(self, state: str) -> None:
         self.feed(SpeechActivityInput(state=state))
 
