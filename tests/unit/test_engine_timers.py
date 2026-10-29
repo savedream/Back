@@ -2,7 +2,7 @@
 import pytest
 
 from app.common.error_code import ErrorCode
-from app.services.procedure_engine.inputs import ModelErrorInput, TickInput
+from app.services.procedure_engine.inputs import ModelErrorInput, RecordSavedInput, TickInput
 from tests.unit.engine_kit import EngineKit, ids
 
 NO_SPEECH_AGAIN = [("template", "T_NO_SPEECH"), ("step", "EM03-04")]
@@ -152,3 +152,15 @@ def test_barge_in_right_after_new_position_ignores_dropped_guidance(kit):
     kit.say("불러도 반응이 없고 숨을 안 쉬어요")  # I1: 심정지 묶음으로 바뀜. 앞 묶음의 cut 되먹임은 아직 안 옴
     kit.barge_in()
     assert kit.state.step_id == "EM01-02" and kit.state.active_manual_id == "EM-01"  # 버려진 골절 안내로 돌아가지 않음
+
+
+def test_no_continue_from_say_while_user_speaks(kit):
+    at_s1b(kit)
+    kit.hold()
+    kit.say("네 많이 휘었어요")
+    kit.barge_in()
+    kit.release("cut")
+    kit.speech("started")  # 말하기 버튼으로 말하는 중
+    start = len(kit.spoken)
+    kit.feed(RecordSavedInput(action_id="x_other", ok=True))  # 그사이 다른 되먹임이 와도
+    assert kit.spoken[start:] == [] and kit.state.step_id == "EM03-05"

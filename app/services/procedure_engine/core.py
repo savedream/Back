@@ -50,7 +50,8 @@ def reduce(state: SessionState, inp: EngineInput, ctx: Ctx) -> EngineResult:
         return new_session(ctx, previous=state, turn_id=inp.turn_id)
     else:
         raise ValueError(f"모르는 엔진 입력 {kind}")
-    if kind in _CONTINUE_AFTER or (kind == "speech_activity" and inp.state == "cancelled"):
+    continues = kind in _CONTINUE_AFTER or (kind == "speech_activity" and inp.state == "cancelled")
+    if continues and not run.s.speech_active:  # 사용자가 말하는 중이면 그 말을 덮어 읽지 않는다
         continue_from_say(run)
     timers.sync_timers(run)
     return run.result()
