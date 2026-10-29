@@ -72,6 +72,7 @@ class PendingSay(BaseModel):
     record_id: str
     turn_id: str | None = None  # 이 문장을 낸 턴. kit_guidance 기록에 쓴다(guide.say와 같은 값)
     call_stack: list[Frame] = []  # 이 문장을 낼 때의 call_stack. 말하기 버튼으로 이 단계에 되돌아올 때 되살린다
+    dropped: bool = False  # 위치가 바뀌어(replace) 버려졌는데 아직 cut 되먹임이 오지 않은 문장
 
 
 class Alert(BaseModel):

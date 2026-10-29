@@ -44,6 +44,7 @@ class Run:
         self.actions: list = []
         self.events: list[EngineEvent] = []
         self._start_epoch = state.epoch
+        self._earlier_says = set(state.pending_says)  # 이 입력 전부터 읽기를 기다리던 문장
         self._force_replace = False
         self.input_obs_keys: list[str] = []  # 이번 입력이 저장한 관찰값(라우팅을 일으키면 새 routing_no로 다시 매김)
         self.user_record_id: str | None = None  # 이번 사용자 발화 기록
@@ -125,4 +126,7 @@ class Run:
 
     def result(self) -> EngineResult:
         mode = "replace" if self._force_replace or self.s.epoch != self._start_epoch else "append"
+        if mode == "replace":
+            for action_id in self._earlier_says & set(self.s.pending_says):
+                self.s.pending_says[action_id].dropped = True  # 시퀀서가 cut으로 돌려줄 문장
         return EngineResult(turn_id=self.turn_id, state=self.s, actions=self.actions, events=self.events, mode=mode)

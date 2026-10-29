@@ -61,7 +61,8 @@ def _barge_in(run: Run) -> None:
 
     끊긴 문장은 시퀀서의 cut 되먹임으로 kit_guidance(played: cut)가 남는다. 이어 가기는 사용자 입력을 처리한 뒤에 한다.
     """
-    unspoken = [p for p in run.s.pending_says.values() if p.utterance.source == "step" and p.utterance.step_id]
+    unspoken = [p for p in run.s.pending_says.values()
+                if not p.dropped and p.utterance.source == "step" and p.utterance.step_id]
     run.preempt()
     if unspoken:
         run.s.call_stack = list(unspoken[0].call_stack)

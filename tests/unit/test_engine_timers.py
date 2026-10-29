@@ -143,3 +143,12 @@ def test_one_move_per_tick_when_two_alerts_end_together(kit):
     assert kit.state.step_id == "EM01-11" and [a.alert_id for a in kit.state.alerts] == ["a_99"]
     kit.feed(TickInput())
     assert kit.state.step_id == "MON-02" and kit.state.alerts == []
+
+
+def test_barge_in_right_after_new_position_ignores_dropped_guidance(kit):
+    at_s1b(kit)
+    kit.hold()
+    kit.say("네 많이 휘었어요")  # EM03-05~07 낭독 대기
+    kit.say("불러도 반응이 없고 숨을 안 쉬어요")  # I1: 심정지 묶음으로 바뀜. 앞 묶음의 cut 되먹임은 아직 안 옴
+    kit.barge_in()
+    assert kit.state.step_id == "EM01-02" and kit.state.active_manual_id == "EM-01"  # 버려진 골절 안내로 돌아가지 않음
