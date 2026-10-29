@@ -9,7 +9,8 @@ from fastapi import APIRouter, FastAPI
 from app.api import system
 from app.common.handlers import install_error_handlers
 from app.config import Settings, get_settings
-from app.core.readiness import Readiness
+from app.core.readiness import Component, Readiness
+from app.services.manual_db import load_manual_db
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -17,7 +18,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        # TODO(1단계): 매뉴얼 DB 적재·검사. 실패하면 시작하지 않는다
+        # 매뉴얼 DB 적재·검사. 실패하면 ManualDBError로 서버가 시작되지 않는다
+        app.state.manual_db = load_manual_db(settings.manual_db_path)
+        app.state.readiness.mark_ready(Component.MANUAL_DB)
         # 서버가 먼저 응답하고, 모델 적재·예열은 백그라운드에서 한다 (뒤 단계)
         yield
 
