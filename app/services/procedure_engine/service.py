@@ -28,11 +28,12 @@ log = logging.getLogger(__name__)
 class EngineService:
     def __init__(self, db: ManualDB, clock: Clock, events: EventSink, speaker: Speaker, devices: DeviceController,
                  records: RecordSink, *, location: Callable[[], Location | None] = lambda: None,
-                 device_timeout_s: float = 2.0):
+                 device_timeout_s: float = 2.0, on_new_session: Callable[[SessionState], object] | None = None):
         self.db = db
         self.clock = clock
         self.events = events
         self._location = location  # GPS 스냅샷. GPS 모듈이 없으면 None
+        self._on_new_session = on_new_session  # 새 세션을 열면(start, session_reset) 부른다. 세션 표에 남기는 데 쓴다
         self.state: SessionState | None = None
         self.sequencer = Sequencer(db, events, speaker, devices, records, self.submit, lambda: self.state, clock,
                                    device_timeout_s)
@@ -145,6 +146,11 @@ class EngineService:
         # 시퀀서에 먼저 넘긴다. 시퀀서는 이 함수가 끝나 차례가 와야 돌므로 이벤트 순서는 그대로이고,
         # 이벤트 발행이 실패해도 낭독이 빠지지 않는다(빠지면 남은 문장 때문에 마감이 걸리지 않는다)
         batch = self.sequencer.submit(result, speak)
+        if self._on_new_session is not None and result.state.session_id != (before.session_id if before else None):
+            try:
+                self._on_new_session(result.state)
+            except Exception:
+                log.exception("새 세션 알림 실패: %s", result.state.session_id)
         events = result.events
         for e in (e for e in events if e.type == "turn.result"):
             self._publish(e.type, result.turn_id, e.data)

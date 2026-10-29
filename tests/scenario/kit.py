@@ -2,6 +2,9 @@
 
 시계는 FakeClock이라 15초·2분을 기다리지 않고 advance()로 넘긴다. 앱은 시험과 같은 이벤트 루프에서 돈다.
 """
+import tempfile
+from pathlib import Path
+
 import httpx
 
 from app.config import Settings
@@ -15,6 +18,8 @@ from tests.unit.shell_kit import until_idle
 class Kit:
     def __init__(self, **settings):
         self.clock = FakeClock()
+        self._tmp = tempfile.TemporaryDirectory()  # 기록 DB
+        settings.setdefault("records_db_path", Path(self._tmp.name) / "records.db")
         self.app = create_app(Settings(_env_file=None, **settings), clock=self.clock)
         self.events: list[Event] = []
 
@@ -32,6 +37,7 @@ class Kit:
     async def __aexit__(self, *exc) -> None:
         await self.http.aclose()
         await self._lifespan.__aexit__(*exc)
+        self._tmp.cleanup()
 
     @property
     def state(self):

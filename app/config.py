@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     post_tts_guard_ms: int = 300
     device_timeout_s: float = 2
 
+    # 기록 저장 재시도 간격(엔진 시계 기준, 시작값에서 두 배씩, 최대값까지). TODO(미정: 임시값)
+    record_retry_base_s: float = 1
+    record_retry_max_s: float = 60
+
     # 모델 프롬프트 앞에 <|im_start|>를 붙일지. TODO(미정: 모델 팀 확인)
     prompt_prefix_im_start: bool = False
 

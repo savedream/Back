@@ -28,6 +28,7 @@ def create_app(settings: Settings | None = None, *, clock: Clock | None = None) 
         readiness = app.state.readiness
         readiness.mark_ready(Component.MANUAL_DB)
         parts = app.state.parts = build_parts(settings, app.state.manual_db, clock)
+        parts.records.start()
         if settings.fake_auto_ready:
             for component in (Component.VAD, Component.STT, Component.TTS, Component.LLM, Component.LLM_WARMUP):
                 readiness.mark_ready(component)
@@ -36,6 +37,7 @@ def create_app(settings: Settings | None = None, *, clock: Clock | None = None) 
             await parts.engine.start()
         yield
         await parts.engine.stop()
+        await parts.records.close()  # 엔진을 멈춘 뒤 남은 기록 쓰기를 마친다
 
     app = FastAPI(
         title="살려드림 백엔드",

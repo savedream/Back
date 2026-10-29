@@ -5,10 +5,16 @@ from app.config import Settings
 from app.main import create_app
 
 
+@pytest.fixture(autouse=True)
+def _records_db_in_tmp(tmp_path, monkeypatch):
+    # Settings를 직접 만드는 시험도 기록 DB를 저장소 폴더가 아닌 tmp에 둔다
+    monkeypatch.setenv("SALYEO_RECORDS_DB_PATH", str(tmp_path / "records.db"))
+
+
 @pytest.fixture
-def settings() -> Settings:
+def settings(tmp_path) -> Settings:
     # 준비 전 동작(503 NOT_READY 등)을 시험할 수 있게 기본은 자동 준비를 끈다. 시나리오 시험만 켠다
-    return Settings(_env_file=None, fake_auto_ready=False)
+    return Settings(_env_file=None, fake_auto_ready=False, records_db_path=tmp_path / "records.db")
 
 
 @pytest.fixture
