@@ -29,13 +29,15 @@ class EngineService:
     def __init__(self, db: ManualDB, clock: Clock, events: EventSink, speaker: Speaker, devices: DeviceController,
                  records: RecordSink, *, location: Callable[[], Location | None] = lambda: None,
                  device_timeout_s: float = 2.0, on_new_session: Callable[[SessionState], object] | None = None,
-                 session_ids: Callable[[], frozenset[str]] = frozenset):
+                 session_ids: Callable[[], frozenset[str]] = frozenset,
+                 on_state: Callable[[SessionState], object] | None = None):
         self.db = db
         self.clock = clock
         self.events = events
         self._location = location  # GPS 스냅샷. GPS 모듈이 없으면 None
         self._on_new_session = on_new_session  # 새 세션을 열면(start, session_reset) 부른다. 세션 표에 남기는 데 쓴다
         self._session_ids = session_ids  # 이미 쓴 세션 ID(세션 표)
+        self._on_state = on_state  # 상태가 바뀌면 부른다. 상태 스냅샷(6-14)을 저장하는 데 쓴다
         self.state: SessionState | None = None
         self.sequencer = Sequencer(db, events, speaker, devices, records, self.submit, lambda: self.state, clock,
                                    device_timeout_s)
@@ -140,7 +142,9 @@ class EngineService:
 
     def _recover(self, inp: EngineInput) -> None:
         try:
-            self.state = recover(self.state, inp, self._ctx()).state
+            before = self.state
+            self.state = recover(before, inp, self._ctx()).state
+            self._state_changed(before)
         except Exception:
             log.exception("실패한 입력 뒤 정리도 실패: %s", inp.kind)
 
@@ -154,6 +158,7 @@ class EngineService:
                 self._on_new_session(result.state)
             except Exception:
                 log.exception("새 세션 알림 실패: %s", result.state.session_id)
+        self._state_changed(before)
         events = result.events
         for e in (e for e in events if e.type == "turn.result"):
             self._publish(e.type, result.turn_id, e.data)
@@ -163,6 +168,13 @@ class EngineService:
         for e in (e for e in events if e.type != "turn.result"):
             self._publish(e.type, result.turn_id, e.data)
         return batch
+
+    def _state_changed(self, before: SessionState | None) -> None:
+        if self._on_state is not None and self.state != before:
+            try:
+                self._on_state(self.state)
+            except Exception:
+                log.exception("상태 변화 알림 실패: %s", self.state.session_id)
 
     def _publish(self, type: str, turn_id: str | None, data: dict) -> None:
         try:

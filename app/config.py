@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     # 경로
     manual_db_path: Path = BACKEND_DIR / "data" / "manual_db.json"
     records_db_path: Path = BACKEND_DIR / "records.db"
+    # 지금 부팅의 ID(Linux). 상태 스냅샷(6-14)이 같은 부팅의 것인지 가린다. 파일이 없으면 스냅샷에서 이어 가지 않는다
+    boot_id_path: Path = Path("/proc/sys/kernel/random/boot_id")
 
     # 버전 (GET /health). 매뉴얼 DB 버전은 적재한 DB의 meta.version에서 읽는다
     app_version: str = "1.3.0"

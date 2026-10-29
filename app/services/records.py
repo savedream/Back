@@ -12,6 +12,7 @@ from typing import Any, Protocol, TypeVar
 from pydantic import TypeAdapter
 
 from app.schemas.record import Record
+from app.schemas.session import SessionState
 from app.services.events import EventSink
 from app.services.procedure_engine.clock import Clock
 
@@ -35,6 +36,13 @@ CREATE TABLE IF NOT EXISTS records (
     saved INTEGER NOT NULL,
     json TEXT NOT NULL,
     UNIQUE (session_id, record_id)
+);
+CREATE TABLE IF NOT EXISTS snapshots (
+    session_id TEXT PRIMARY KEY,
+    saved_wall REAL NOT NULL,
+    saved_now REAL NOT NULL,
+    boot_id TEXT,
+    json TEXT NOT NULL
 );
 """
 
@@ -77,8 +85,9 @@ class SqliteRecordStore:
     """
 
     def __init__(self, path: Path, clock: Clock, events: EventSink, *, retry_base_s: float = 1,
-                 retry_max_s: float = 60):
+                 retry_max_s: float = 60, boot_id: str | None = None):
         self._path = path
+        self._boot_id = boot_id  # 스냅샷에 남기는 지금 부팅의 ID
         self._clock = clock
         self._events = events
         self._retry_base_s = retry_base_s
@@ -96,6 +105,9 @@ class SqliteRecordStore:
         self.last_session_id: str | None = None  # 시작할 때 세션 표의 마지막 세션(전원을 켤 때의 previous_session_id)
         self._unsaved: dict[tuple[str, str], Record] = {}  # 저장에 실패해 다시 저장할 기록
         self._unsaved_sessions: dict[str, dict] = {}  # 저장에 실패해 다시 저장할 세션 표의 행
+        self._snapshot: tuple | None = None  # 아직 쓰지 않은 마지막 스냅샷 행. 쓰기 스레드와 함께 쓰므로 잠금으로 바꾼다
+        self._snapshot_lock = threading.Lock()
+        self._snapshot_job: asyncio.Future | None = None
         self._retry_lock = asyncio.Lock()
         self._retry_task: asyncio.Task | None = None
 
@@ -184,6 +196,18 @@ class SqliteRecordStore:
         self._sessions.setdefault(session_id, [])
         return self._attempt_session(info)
 
+    def save_snapshot(self, state: SessionState) -> None:
+        """상태 스냅샷(6-14)을 쓰기 스레드로 저장한다(세션마다 최신 하나). 쓰기가 밀리면 마지막 것만 쓴다.
+
+        이어 갈 때 단조 시계의 마감을 남은 시간으로 바꿀 수 있게 저장 시각(벽시계 POSIX 초·엔진 시계)과 boot_id를 함께 둔다.
+        """
+        row = (state.session_id, self._clock.wall().timestamp(), self._clock.now(), self._boot_id,
+               state.model_dump_json())
+        with self._snapshot_lock:
+            self._snapshot = row
+        if self._snapshot_job is None or self._snapshot_job.done():
+            self._queue_snapshot()
+
     async def session_records(self, session_id: str) -> list[Record] | None:
         """세션의 기록. 이 프로세스의 세션이면 메모리(발생 순서), 아니면 SQLite에서 시각순. 없는 세션이면 None."""
         if session_id in self._sessions:
@@ -260,6 +284,26 @@ class SqliteRecordStore:
             log.error("세션 저장 실패: %s", info["session_id"], exc_info=future.exception())
             self._unsaved_sessions[info["session_id"]] = info
             self._start_retry()
+
+    def _queue_snapshot(self) -> None:
+        self._snapshot_job = self._enqueue(self._write_snapshot)
+        self._snapshot_job.add_done_callback(self._snapshot_written)
+
+    def _write_snapshot(self, conn: sqlite3.Connection) -> None:
+        """쓰기 스레드. 그사이 들어온 스냅샷 중 마지막 것 하나만 쓴다."""
+        with self._snapshot_lock:
+            row, self._snapshot = self._snapshot, None
+        if row is not None:
+            with conn:
+                conn.execute("INSERT OR REPLACE INTO snapshots (session_id, saved_wall, saved_now, boot_id, json) "
+                             "VALUES (?, ?, ?, ?, ?)", row)
+
+    def _snapshot_written(self, future: asyncio.Future) -> None:
+        """쓰는 동안 새 스냅샷이 들어왔으면 이어서 쓴다. 실패하면 로그만 남기고 다음 상태 변화 때 다시 쓴다."""
+        if future.exception() is not None:
+            log.error("상태 스냅샷 저장 실패", exc_info=future.exception())
+        elif self._snapshot is not None and not self._closed:
+            self._queue_snapshot()
 
     def _start_retry(self) -> None:
         if not self._closing and (self._retry_task is None or self._retry_task.done()):

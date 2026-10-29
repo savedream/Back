@@ -16,8 +16,8 @@ from tests.unit.shell_kit import until_idle
 
 
 class Kit:
-    def __init__(self, **settings):
-        self.clock = FakeClock()
+    def __init__(self, clock: FakeClock | None = None, **settings):
+        self.clock = clock or FakeClock()
         self._tmp = tempfile.TemporaryDirectory()  # 기록 DB
         settings.setdefault("records_db_path", Path(self._tmp.name) / "records.db")
         self.app = create_app(Settings(_env_file=None, **settings), clock=self.clock)
