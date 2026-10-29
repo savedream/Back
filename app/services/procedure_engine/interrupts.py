@@ -168,16 +168,22 @@ def prompt_timed_out(run: Run) -> None:
 
 
 def _continue_deferred(run: Run, fc: FunctionCall | None) -> bool:
+    """전환 확인에 아니요: 확인을 건 상황 설명을 5번(현재 질문 분기)과 6번(관찰 대기 중 의식·호흡 → MON-02)부터 잇는다."""
     step = current_step(run)
-    if fc is None or fc.observation is None or step is None or step["kind"] != "ask" or not step["slot"]:
+    if fc is None or fc.observation is None or step is None:
         return False
-    value = getattr(fc.observation, step["slot_key"])
-    branch = slot_branch(step, [value]) if value != -1 else None
-    if branch is None:
-        return False
-    log_answer(run, step, [value], "answer", branch)
-    goto(run, step[branch])
-    return True
+    o = fc.observation
+    if step["kind"] == "ask" and step["slot"]:
+        value = getattr(o, step["slot_key"])
+        branch = slot_branch(step, [value]) if value != -1 else None
+        if branch is not None:
+            log_answer(run, step, [value], "answer", branch)
+            goto(run, step[branch])
+            return True
+    if step["step_id"] == C.OBSERVE_WAIT_STEP and (o.conscious != -1 or o.breathing != -1):
+        goto(run, C.OBSERVE_RECHECK_STEP)
+        return True
+    return False
 
 
 # 타이머 초기화: 현재 측정 구간을 기록에 저장한 뒤 초기화(저장 결과는 RecordSaved로 돌아온다)

@@ -164,6 +164,16 @@ def test_correction_with_two_values_rebranches_latest_question(kit):
     assert kit.state.observation["conscious"].allowed == [1]  # 의식 값도 저장은 한다
 
 
+def test_switch_no_in_observe_wait_rechecks(kit):
+    kit.model.add("화상을 입었는데 숨은 잘 쉬어요",
+                  "<maum_0>(situation=6, conscious=-1, breathing=1, bleeding=-1, movement=-1, scene_danger=-1)<maum_end>")
+    at_s5b(kit)
+    kit.say("아까 잘못 말했어 숨 쉬어")
+    assert kit.state.step_id == "MON-06"
+    assert ids(kit.say("화상을 입었는데 숨은 잘 쉬어요")) == [("template", "T_SWITCH_ASK")]
+    assert ids(kit.say("아니요")) == [("step", "MON-02")]  # 관찰 대기 중 호흡 값이 들어왔으니 다시 확인
+
+
 @pytest.mark.parametrize("text, expected, speed", [
     ("다시 말해 줘", [("step", "EM03-04")], 0),
     ("처음부터 다시", [("step", "EM03-04")], 0),
