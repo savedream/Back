@@ -5,10 +5,13 @@
 import asyncio
 import logging
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 from pydantic import BaseModel
 
 from app.common.error_code import ErrorCode
+from app.common.exceptions import AppError
 from app.schemas.function_call import FunctionCall
 from app.schemas.turn import NormalizedText
 from app.services.model_runner import ModelRunner
@@ -36,6 +39,12 @@ async def run_text_turn(turn_id: str, text: str, model: ModelRunner, model_timeo
     start = time.perf_counter()
     normalized = normalize(text)
     latency["normalize"] = _elapsed_ms(start)
+    return await interpret(turn_id, normalized, model, model_timeout_s, latency)
+
+
+async def interpret(turn_id: str, normalized: NormalizedText, model: ModelRunner, model_timeout_s: float,
+                    latency: dict[str, int]) -> TurnOutcome:
+    """④ 모델 → ⑤ 파서. latency에 model·parse 시간을 더한다."""
 
     def failed(code: ErrorCode, raw: str | None = None) -> TurnOutcome:
         return TurnOutcome(
@@ -66,3 +75,27 @@ async def run_text_turn(turn_id: str, text: str, model: ModelRunner, model_timeo
     return TurnOutcome(
         turn_id=turn_id, normalized=normalized, raw=raw, function_call=function_call, error_code=None, latency_ms=latency
     )
+
+
+class TurnLock:
+    """음성 경로·/api/speech/start·/api/utterances 공용 턴 잠금(계획 3-5). 턴을 시작할 때 잡으며 턴 번호를 매기고,
+    엔진이 그 턴 입력을 처리한 뒤 놓는다. 잡혀 있으면 409 AUDIO_BUSY."""
+
+    def __init__(self) -> None:
+        self._busy = False
+        self._count = 0
+
+    @property
+    def busy(self) -> bool:
+        return self._busy
+
+    @contextmanager
+    def turn(self) -> Iterator[str]:
+        if self._busy:
+            raise AppError(ErrorCode.AUDIO_BUSY, "다른 턴을 처리 중입니다")
+        self._busy = True
+        self._count += 1
+        try:
+            yield f"t_{self._count:04d}"
+        finally:
+            self._busy = False

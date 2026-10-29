@@ -2,7 +2,10 @@
 import asyncio
 
 from app.common.error_code import ErrorCode
-from app.core.turn import run_text_turn
+import pytest
+
+from app.common.exceptions import AppError
+from app.core.turn import TurnLock, run_text_turn
 from app.fakes.fake_model import FakeModel
 
 
@@ -55,3 +58,24 @@ async def test_model_runtime_error():
 async def test_outcome_serializes_error_code_as_string():
     out = await run_text_turn("t_0006", "어 그게 아니고", FakeModel(), 5)
     assert out.model_dump(mode="json")["error_code"] == "MODEL_PARSE_ERROR"
+
+
+def test_turn_lock_numbers_turns_and_refuses_second():
+    lock = TurnLock()
+    with lock.turn() as first:
+        assert first == "t_0001" and lock.busy
+        with pytest.raises(AppError) as e:
+            with lock.turn():
+                pass
+        assert e.value.code is ErrorCode.AUDIO_BUSY and e.value.status == 409
+    with lock.turn() as second:
+        assert second == "t_0002"
+    assert not lock.busy
+
+
+def test_turn_lock_released_on_error():
+    lock = TurnLock()
+    with pytest.raises(RuntimeError):
+        with lock.turn():
+            raise RuntimeError("턴 처리 중 오류")
+    assert not lock.busy
