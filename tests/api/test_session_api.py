@@ -1,6 +1,7 @@
-"""세션 API (명세서 "세션"): GET /api/session."""
+"""세션 API (명세서 "세션"): GET /api/session, GET /api/session/log."""
 import pytest
 
+from app.services.procedure_engine.inputs import SessionResetInput
 from tests.scenario.kit import Kit
 from tests.unit.engine_kit import DB
 
@@ -122,3 +123,66 @@ def test_before_ready_returns_empty_session(client):
     assert data["flags"] == [] and data["alerts"] == [] and isinstance(data["seq"], int)
     assert data["timer"] == {"object": 3, "status": "idle", "elapsed_s": 0, "started_at": None}
     assert data["devices"]["metronome"]["status"] == "off"
+
+
+async def get_log(kit: Kit, **params) -> dict:
+    res = await kit.http.get("/api/session/log", params=params)
+    assert res.status_code == 200, res.text
+    return res.json()["data"]
+
+
+async def test_log_of_current_session(kit):
+    await kit.say("사람이 쓰러졌는데 숨을 안 쉬어")
+    await kit.advance(30)
+    data = await get_log(kit)
+    assert list(data) == ["session_id", "started_at", "elapsed_s", "unsaved", "records"]
+    assert (data["session_id"], data["started_at"]) == (kit.state.session_id, kit.state.started_at)
+    assert data["elapsed_s"] == 30 and data["unsaved"] == 0  # 현재 세션은 지금까지
+    assert data["records"] == [r.model_dump(exclude={"session_id"}) for r in kit.records]
+    assert "session_id" not in data["records"][0] and all(r["saved"] for r in data["records"])
+    assert await get_log(kit, session_id=kit.state.session_id) == data
+
+
+async def test_log_includes_unsaved_records(kit):
+    kit.parts.records.fail_next_save("user_utterance")
+    await kit.say("사람이 쓰러졌는데 숨을 안 쉬어")
+    data = await get_log(kit)
+    failed = [r for r in data["records"] if not r["saved"]]
+    assert data["unsaved"] == 1 and [r["kind"] for r in failed] == ["user_utterance"]
+
+
+async def test_log_of_previous_session(kit):
+    first = kit.state
+    await kit.say("사람이 쓰러졌는데 숨을 안 쉬어")
+    await kit.advance(20)
+    await kit.say("다시 말해 줘")
+    await kit.advance(5)
+    earlier = list(kit.records)
+    await kit.parts.engine.submit(SessionResetInput(turn_id="t_reset"), speak=False)
+    data = await get_log(kit, session_id=first.session_id)
+    assert (data["session_id"], data["started_at"]) == (first.session_id, first.started_at)
+    assert data["elapsed_s"] == 20  # 지난 세션은 마지막 기록까지
+    assert data["records"] == [r.model_dump(exclude={"session_id"}) for r in earlier]
+    assert (await get_log(kit))["session_id"] == kit.state.session_id != first.session_id
+
+
+async def test_log_of_session_from_earlier_run(tmp_path):
+    path = tmp_path / "records.db"
+    async with Kit(records_db_path=path) as kit:
+        await kit.say("사람이 쓰러졌는데 숨을 안 쉬어")
+        first, earlier = kit.state, list(kit.records)
+    async with Kit(records_db_path=path) as kit:  # 다시 켜면 새 세션, 지난 세션 기록은 SQLite에서
+        data = await get_log(kit, session_id=first.session_id)
+        assert data["started_at"] == first.started_at and data["unsaved"] == 0
+        assert data["records"] == [r.model_dump(exclude={"session_id"}) | {"saved": True} for r in earlier]
+
+
+async def test_log_of_unknown_session_is_404(kit):
+    res = await kit.http.get("/api/session/log", params={"session_id": "s_20000101_0000"})
+    assert res.status_code == 404
+    assert res.json() == {"ok": False, "error": {"code": "SESSION_NOT_FOUND", "message": "세션이 없습니다"}}
+
+
+def test_log_before_ready_has_no_current_session(client):
+    res = client.get("/api/session/log")
+    assert res.status_code == 404 and res.json()["error"]["code"] == "SESSION_NOT_FOUND"

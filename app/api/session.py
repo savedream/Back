@@ -1,6 +1,10 @@
-"""세션 API (명세서 "세션"): GET /api/session."""
+"""세션 API (명세서 "세션"): GET /api/session, GET /api/session/log."""
+from datetime import datetime
+
 from fastapi import APIRouter, Request
 
+from app.common.error_code import ErrorCode
+from app.common.exceptions import AppError
 from app.common.response import ok
 from app.schemas.record import Record
 from app.schemas.session import SessionState
@@ -30,6 +34,34 @@ async def get_session(request: Request, debug: bool = False):
     records = await parts.records.session_records(state.session_id) or []
     mic = engine.sequencer.speech_state or listen_state(state)["state"]
     return ok(_session_data(state, ctx, seq, mic, records, debug))
+
+
+@router.get("/session/log")
+async def get_session_log(request: Request, session_id: str | None = None):
+    """세션의 처치 기록(시각순, 저장하지 못한 기록도 saved false로). session_id가 없으면 현재 세션, 없는 세션이면 404.
+
+    elapsed_s는 현재 세션이면 지금까지, 지난 세션이면 마지막 기록까지 걸린 시간이다.
+    """
+    parts = request.app.state.parts
+    state = parts.engine.state
+    current = state.session_id if state is not None else None
+    session_id = session_id or current
+    info = await parts.records.session_info(session_id) if session_id else None
+    if info is None and (session_id is None or session_id != current):
+        raise AppError(ErrorCode.SESSION_NOT_FOUND)
+    started_at = state.started_at if session_id == current else info["started_at"]
+    records = await parts.records.session_records(session_id) or []
+    if session_id == current:
+        end = parts.clock.wall()
+    else:
+        end = datetime.fromisoformat(records[-1].at if records else started_at)
+    return ok({
+        "session_id": session_id,
+        "started_at": started_at,
+        "elapsed_s": max(0, int((end - datetime.fromisoformat(started_at)).total_seconds())),
+        "unsaved": sum(r.session_id == session_id for r in parts.records.unsaved()),
+        "records": [r.model_dump(exclude={"session_id"}) for r in records],
+    })
 
 
 def _session_data(state: SessionState, ctx: Ctx, seq: int, mic: str, records: list[Record], debug: bool) -> dict:
