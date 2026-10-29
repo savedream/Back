@@ -84,7 +84,7 @@ def _situation_branch(run: Run, inp: FunctionCallInput, fc: FunctionCall) -> str
     step = current_step(run)
     if step is None or step["kind"] != "ask" or not step["slot"]:
         return None
-    if inp.epoch != run.s.epoch or inp.step_id != run.s.step_id:
+    if inp.epoch != run.start_epoch or inp.step_id != run.s.step_id:
         return None
     value = getattr(fc.observation, step["slot_key"])
     return slot_branch(step, [value]) if value != -1 else None
@@ -148,8 +148,8 @@ def _answer_check(run: Run, inp: FunctionCallInput, fc: FunctionCall) -> None:
         return
     if step is None:
         return  # 안내 전 확인 응답은 기록만
-    if inp.epoch != run.s.epoch or inp.step_id != run.s.step_id:
-        ask_again(run)  # 질문이 바뀌어 있으면 그 답을 쓰지 않고 현재 질문을 다시 묻는다
+    if inp.epoch != run.start_epoch or inp.step_id != run.s.step_id:
+        ask_again(run)  # 도착했을 때 질문이 바뀌어 있었으면 그 답을 쓰지 않고 현재 질문을 다시 묻는다
         return
     if step["kind"] == "ask":
         branch, allowed, said = _answer_branch(step, fc)

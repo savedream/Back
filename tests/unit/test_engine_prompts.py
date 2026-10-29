@@ -145,3 +145,10 @@ def test_progress_phrase_cancels_timer_reset_in_wait():
     assert k.state.pending_prompt is None and k.state.timer.status == "running"
     results = [e.data for e in k.events[mark:] if e.type == "turn.result"]
     assert results == [{"function_call": None, "error_code": None}]  # 진행 표현 턴도 해석 결과를 알린다
+
+
+def test_answer_after_cancelled_which_on_answers_the_question(kit):
+    kit.say("켜 줘")  # 어떤 기능을 켤까요?
+    out = ids(kit.say("네 많이 휘었어요"))  # 기능 요청이 아니라 원래 질문의 답: 확인 질문은 취소하고 그 답을 쓴다
+    assert out == [("step", "EM03-05"), ("step", "EM03-06"), ("step", "EM03-07")]
+    assert kit.state.pending_prompt is None

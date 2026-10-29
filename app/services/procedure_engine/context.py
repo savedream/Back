@@ -55,6 +55,11 @@ class Run:
         setattr(self.s.counters, kind, value)
         return f"{prefix}_{value:0{width}d}"
 
+    @property
+    def start_epoch(self) -> int:
+        """이 입력이 도착했을 때의 epoch. 사용자 턴이 들고 온 epoch와 비교한다(6-1)."""
+        return self._start_epoch
+
     # 위치: 단계·확인 질문·활성 매뉴얼이 바뀔 때만 epoch가 오른다
     def set_step(self, step_id: str | None) -> None:
         if self.s.step_id != step_id:
