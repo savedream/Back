@@ -5,35 +5,36 @@
 from app.schemas.record import DeviceResultRecord
 from app.services.procedure_engine import engine_constants as C
 from app.services.procedure_engine.context import Run
-from app.services.procedure_engine.flow import announce_gps, ask_again, set_sound_device
-from app.services.procedure_engine.interrupts import clear_prompt, open_prompt, save_timer_record
+from app.services.procedure_engine.flow import announce_gps, set_sound_device
+from app.services.procedure_engine.interrupts import clear_prompt, open_prompt, reask, save_timer_record
 from app.services.procedure_engine.templates import SOUND_DEVICES_SPOKEN, read_count
 
 _SOUND = {2: ("metronome", "T_DEV_METRO_ON", "T_DEV_METRO_OFF"), 4: ("rescue_signal", "T_DEV_SOS_ON", "T_DEV_SOS_OFF")}
 
 
 def request_device(run: Run, obj: int, typ: int, source: str) -> None:
+    """걸려 있는 확인 질문: which_on·which_off는 음성 기능 요청이 그 답이고, switch_confirm은 다른 입력으로 취소하지
+    않고 처리 뒤 다시 묻는다(v1.7). 그 밖의 확인 질문은 이 입력으로 취소한다. 버튼은 누른 그대로 실행한다."""
     prompt = run.s.pending_prompt
-    if prompt is not None and prompt.type in ("which_on", "which_off") and obj in _SOUND:
-        # 대상 없는 켜기·끄기 확인 질문의 답: type과 상관없이 켜기·끄기
-        typ = 1 if prompt.type == "which_on" else 2
+    if prompt is not None and prompt.type in ("which_on", "which_off") and obj in _SOUND and source == "voice":
+        typ = 1 if prompt.type == "which_on" else 2  # 대상 없는 켜기·끄기 확인 질문의 답: type과 상관없이 켜기·끄기
         clear_prompt(run)
-    elif prompt is not None:
-        clear_prompt(run)  # 그 확인 질문의 답이 아닌 입력이면 취소하고 이 입력을 처리한다
+    elif prompt is not None and prompt.type != "switch_confirm":
+        clear_prompt(run)
 
+    waiting = False  # 새 확인 질문을 걸었거나 저장 결과를 기다리면 지금 다시 묻지 않는다
     if obj == 1:
         announce_gps(run)
     elif obj in _SOUND:
         _sound(run, obj, on=typ == 1, source=source)
     elif obj == 3:
-        if _timer(run, typ, source):
-            return  # 확인 질문을 걸었으면 원래 질문을 다시 묻지 않는다
+        waiting = _timer(run, typ, source)
     elif obj == 5:
         _volume(run, typ, source)
     elif obj == -1:
-        if _no_target(run, on=typ == 1, source=source):
-            return
-    ask_again(run)
+        waiting = _no_target(run, on=typ == 1, source=source)
+    if not waiting:
+        reask(run)
 
 
 def _sound(run: Run, obj: int, on: bool, source: str) -> None:

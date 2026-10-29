@@ -77,6 +77,14 @@ def reask_prompt(run: Run) -> None:
     prompt.waits_for_action = run.say_template(prompt.template_id, **values)
 
 
+def reask(run: Run) -> None:
+    """걸려 있는 확인 질문이 있으면 그것을, 없으면 현재 질문을 다시 묻는다."""
+    if run.s.pending_prompt is not None:
+        reask_prompt(run)
+    else:
+        ask_again(run)
+
+
 def resume_after_prompt(run: Run, prompt: PendingPrompt) -> None:
     """확인이 끝난 뒤 원래 단계에 그대로 있을 때만 원래 질문을 다시 묻는다."""
     if run.s.step_id == prompt.origin_step_id:
@@ -178,7 +186,6 @@ def save_timer_record(run: Run, source: str, origin_step_id: str | None) -> None
     run.s.timer_reset_record = run.record(DeviceResultRecord(
         **run.record_base(), object=3, type=4, source=source, result="success", detail={"elapsed_s": elapsed}),
         wants_result=True)
-    run.s.pending_prompt = None
 
 
 def finish_timer_reset(run: Run, ok: bool) -> None:
@@ -189,4 +196,4 @@ def finish_timer_reset(run: Run, ok: bool) -> None:
     else:
         run.say_template("T_DEV_TIMER_KEEP")
         run.notice("SAVE_FAILED")
-    ask_again(run)
+    reask(run)

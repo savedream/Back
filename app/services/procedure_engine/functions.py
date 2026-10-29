@@ -68,9 +68,9 @@ def _during_switch_confirm(run: Run, fc: FunctionCall) -> None:
     if fc.func == 3:
         repeat(run, fc.args["scope"], fc.args["speed"])
     elif fc.func == 4:
-        prompt = run.s.pending_prompt
+        # 확인 질문을 다시 묻거나, 기능에 확인이 필요하면 그 확인 질문이 전환 확인을 대신한다
         request_device(run, fc.args["object"], fc.args["type"], "voice")
-        run.s.pending_prompt = prompt  # 기기 요청이 확인 질문을 지우지 않게 되돌린다
+        return
     elif fc.func == 5:
         _out_of_scope(run, fc.args["type"], reask=False)
     if run.s.pending_prompt is not None:
