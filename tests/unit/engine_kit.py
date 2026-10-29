@@ -17,7 +17,7 @@ from app.services.procedure_engine.actions import DeviceAction, EngineResult, Re
 from app.services.procedure_engine.clock import FakeClock
 from app.services.procedure_engine.context import Ctx
 from app.services.procedure_engine.core import new_session, reduce
-from app.services.procedure_engine.engine_constants import PROGRESS_PHRASES
+from app.services.procedure_engine.functions import is_progress_phrase
 from app.services.procedure_engine.inputs import (
     BargeInInput, DeviceResultInput, FunctionCallInput, ModelErrorInput, PlaybackInput, ProgressPhraseInput, RecordSavedInput,
     SpeechActivityInput, TickInput,
@@ -137,8 +137,7 @@ def user_turn(state: SessionState, text: str, model: FakeModel, turn_id: str):
     """문장 하나를 엔진 입력으로: 대기 단계의 진행 표현이면 모델을 건너뛰고, 아니면 가짜 모델 표 → 파서."""
     n = normalize(text).text
     base = {"turn_id": turn_id, "epoch": state.epoch, "step_id": state.step_id, "text": text, "normalized": n}
-    step = DB.steps_by_id.get(state.step_id) if state.step_id else None
-    if step is not None and step["kind"] == "wait" and n in PROGRESS_PHRASES:
+    if is_progress_phrase(DB, state, n):
         return ProgressPhraseInput(**base)
     raw = model.table.get(n, "<maum_9>")
     try:

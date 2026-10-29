@@ -4,7 +4,8 @@
 """
 import pytest
 
-from tests.unit.engine_kit import NO_FIX_LAST, EngineKit, assert_from_db, ids, user_turn
+from app.services.procedure_engine.functions import is_progress_phrase
+from tests.unit.engine_kit import DB, NO_FIX_LAST, EngineKit, assert_from_db, ids, user_turn
 
 
 @pytest.fixture
@@ -253,6 +254,13 @@ def test_s16_progress_phrase_in_wait(kit):
     calls = kit.model.calls
     assert ids(kit.say("다음")) == [("template", "T_WAITING")]
     assert kit.model.calls == calls and kit.state.step_id == "EM01-15" and len(kit.state.alerts) == 1
+
+
+def test_progress_phrase_only_in_wait(kit):
+    at_s1b(kit)
+    assert not is_progress_phrase(DB, kit.state, "다음")  # 질문(EM03-04) 중에는 진행 표현으로 보지 않는다
+    waiting = at_s5b(EngineKit())
+    assert is_progress_phrase(DB, waiting.state, "다음") and not is_progress_phrase(DB, waiting.state, "다음에 뭐 해")
 
 
 def test_s17_chit_chat_before_guidance(kit):

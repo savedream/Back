@@ -1,7 +1,8 @@
 """사용자 턴 처리 (명세서 6-4): 모델 출력별, 해석·인식 실패, 대기 단계 진행 표현. 입력 하나에 단계 이동은 한 번만."""
 from app.schemas.function_call import FunctionCall, Observation
 from app.schemas.record import UserReportRecord, UserUtteranceRecord
-from app.schemas.session import ObservedValue
+from app.schemas.session import ObservedValue, SessionState
+from app.services.manual_db import ManualDB
 from app.services.procedure_engine import engine_constants as C
 from app.services.procedure_engine.context import Run
 from app.services.procedure_engine.devices_rules import request_device
@@ -267,6 +268,12 @@ def handle_model_error(run: Run, inp: ModelErrorInput) -> None:
         reask_prompt(run)
     else:
         ask_again(run)
+
+
+def is_progress_phrase(db: ManualDB, state: SessionState, normalized: str) -> bool:
+    """대기 단계에서 정규화한 문장 전체가 진행 표현 목록과 같은지(6-8). 같으면 턴 경로가 모델을 건너뛴다."""
+    step = db.steps_by_id.get(state.step_id) if state.step_id else None
+    return step is not None and step["kind"] == "wait" and normalized in C.PROGRESS_PHRASES
 
 
 def handle_progress_phrase(run: Run, inp: ProgressPhraseInput) -> None:
