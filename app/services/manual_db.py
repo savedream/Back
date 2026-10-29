@@ -1,10 +1,12 @@
-"""매뉴얼 DB 검사.
+"""매뉴얼 DB 적재·검사.
 
 서버 시작과 tools/check_manual_db.py가 같은 검사를 쓴다. 표준 라이브러리만 쓴다(도구는 의존성 없이 돈다).
 """
 import json
 import re
 from collections import Counter
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 # 엔진(명세서 ⑥)이 쓰는 템플릿과 단계 ID
@@ -261,3 +263,49 @@ def failures(results: dict[str, Any]) -> list[str]:
     if results[SITUATION_MAPPING] is not True:
         fails.append(SITUATION_MAPPING)
     return fails
+
+
+class ManualDBError(Exception):
+    """매뉴얼 DB를 쓸 수 없음. 서버는 이 예외로 시작을 멈춘다."""
+
+    def __init__(self, message: str, failures: list[str] | None = None):
+        super().__init__(message)
+        self.failures = failures or []
+
+
+@dataclass(frozen=True)
+class ManualDB:
+    """검사를 통과한 매뉴얼 DB. 원본과 ID별 찾아보기."""
+
+    data: dict
+    version: str  # meta.version 첫 토큰 (예: "v1.7")
+    steps_by_id: dict[str, dict]
+    manuals_by_id: dict[str, dict]
+    templates_by_id: dict[str, dict]
+    manual_by_situation: dict[int, dict]  # situation_code → 상황 매뉴얼 (-1 → EM-00)
+
+
+def load_manual_db(path: Path) -> ManualDB:
+    """읽고 검사한다. 파일이 없거나, JSON이 깨졌거나, 필수 검사가 실패하면 ManualDBError."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise ManualDBError(f"매뉴얼 DB 파일이 없습니다: {path}") from None
+    except json.JSONDecodeError as e:
+        raise ManualDBError(f"매뉴얼 DB JSON 형식이 올바르지 않습니다: {path} ({e})") from None
+    try:
+        results = check(data)
+    except (KeyError, TypeError, AttributeError) as e:
+        raise ManualDBError(f"매뉴얼 DB 구조가 올바르지 않습니다: {path} ({type(e).__name__}: {e})") from None
+    fails = failures(results)
+    if fails:
+        detail = "; ".join(f"{k}: {results[k]}" for k in fails)
+        raise ManualDBError(f"매뉴얼 DB 검사 실패: {path} ({detail})", fails)
+    return ManualDB(
+        data=data,
+        version=data["meta"]["version"].split()[0],
+        steps_by_id={s["step_id"]: s for s in data["steps"]},
+        manuals_by_id={m["manual_id"]: m for m in data["manuals"]},
+        templates_by_id={t["template_id"]: t for t in data["templates"]},
+        manual_by_situation={m["situation_code"]: m for m in data["manuals"] if m["type"] == "situation"},
+    )

@@ -6,9 +6,12 @@ import sys
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
-from app.config import BACKEND_DIR
-from app.services.manual_db import check, failures
+from app.config import BACKEND_DIR, Settings
+from app.core.readiness import Component
+from app.main import create_app
+from app.services.manual_db import ManualDBError, check, failures, load_manual_db
 
 DB_PATH = BACKEND_DIR / "data" / "manual_db.json"
 TOOL = BACKEND_DIR / "tools" / "check_manual_db.py"
@@ -68,3 +71,61 @@ def test_tool_fails_on_broken_db(tmp_path, db):
     res = _run_tool(str(_write(tmp_path, db)))
     assert res.returncode == 1
     assert "[FAIL] 끊긴 단계 참조" in res.stdout
+
+
+def test_load_builds_lookups(real_db):
+    mdb = load_manual_db(DB_PATH)
+    assert mdb.version == real_db["meta"]["version"].split()[0]
+    assert len(mdb.steps_by_id) == len(real_db["steps"])
+    assert len(mdb.manuals_by_id) == len(real_db["manuals"])
+    assert len(mdb.templates_by_id) == len(real_db["templates"])
+    assert mdb.steps_by_id["EM01-13"]["kind"] == "ask"
+    assert mdb.manual_by_situation[1]["manual_id"] == "EM-01"
+    assert mdb.manual_by_situation[-1]["manual_id"] == "EM-00"
+    assert len(mdb.manual_by_situation) == 16
+
+
+def test_load_raises_when_check_fails(tmp_path, db):
+    db["steps"][0]["next"] = "XX-99"
+    with pytest.raises(ManualDBError) as e:
+        load_manual_db(_write(tmp_path, db))
+    assert e.value.failures[0] == "끊긴 단계 참조"
+    assert "XX-99" in str(e.value)
+
+
+def test_load_raises_on_missing_file(tmp_path):
+    with pytest.raises(ManualDBError, match="파일이 없습니다"):
+        load_manual_db(tmp_path / "none.json")
+
+
+def test_load_raises_on_broken_json(tmp_path):
+    path = tmp_path / "manual_db.json"
+    path.write_text("{", encoding="utf-8")
+    with pytest.raises(ManualDBError, match="JSON 형식"):
+        load_manual_db(path)
+
+
+def test_load_raises_on_missing_field(tmp_path, db):
+    del db["routing"]
+    with pytest.raises(ManualDBError, match="구조"):
+        load_manual_db(_write(tmp_path, db))
+
+
+def test_server_does_not_start_with_broken_db(tmp_path, db):
+    db["steps"][0]["next"] = "XX-99"
+    app = create_app(Settings(_env_file=None, manual_db_path=_write(tmp_path, db)))
+    with pytest.raises(ManualDBError):
+        with TestClient(app):
+            pass
+
+
+def test_startup_loads_db_and_marks_manual_db_ready(real_db):
+    """시작 때 매뉴얼 DB를 적재하고 준비 상태에 표시한다. 나머지 부품이 끝나야 ready."""
+    app = create_app(Settings(_env_file=None))
+    with TestClient(app) as c:
+        assert app.state.manual_db.version == real_db["meta"]["version"].split()[0]
+        assert c.get("/api/health").json()["data"]["ready"] is False
+        for comp in Component:
+            if comp is not Component.MANUAL_DB:
+                app.state.readiness.mark_ready(comp)
+        assert c.get("/api/health").json()["data"]["ready"] is True
