@@ -83,6 +83,23 @@ def test_i1_skipped_when_situation_report_branches_into_cardiac(kit):
     assert ids(kit.say("숨을 전혀 안 쉬는 것 같아요")) == [("step", "EM01-05")]
 
 
+def test_value_said_outside_question_list_is_kept(kit):
+    kit.model.add("상황이 잘 모르겠어요",
+                  "<maum_0>(situation=-1, conscious=-1, breathing=-1, bleeding=-1, movement=-1, scene_danger=-1)<maum_end>")
+    kit.model.add("네 숨을 거의 안 쉬어요",
+                  "<maum_1>(answer=1, conscious=-1, breathing=0, bleeding=-1, movement=-1, scene_danger=-1)<maum_end>")
+    kit.model.add("갑자기 불러도 대답이 없어요",
+                  "<maum_0>(situation=-1, conscious=0, breathing=-1, bleeding=-1, movement=-1, scene_danger=-1)<maum_end>")
+    kit.say("상황이 잘 모르겠어요")
+    kit.say("네")
+    kit.say("아니요")
+    assert kit.state.step_id == "EM00-06"  # 숨쉬기 힘들어하나요? (네 [2] / 아니요 [1])
+    assert ids(kit.say("네 숨을 거의 안 쉬어요"))[0] == ("step", "EM00-07")  # 분기는 '네'대로
+    assert kit.state.observation["breathing"].allowed == [0]  # 기억하는 값은 직접 말한 '숨 안 쉼'
+    out = ids(kit.say("갑자기 불러도 대답이 없어요"))
+    assert out[:2] == [("intro", "EM-01"), ("step", "EM01-23")]  # 의식 0이 들어오면 심정지(I1)를 놓치지 않는다
+
+
 def test_s5_compression_and_i2_recovery(kit):
     kit.say("사람이 쓰러졌는데 숨을 안 쉬어")
     assert ids(kit.say("아니요 대답 없어요")) == [("step", "EM01-02"), ("step", "EM01-03"), ("template", "T_GPS_OK"),

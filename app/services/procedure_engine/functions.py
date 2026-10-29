@@ -116,18 +116,19 @@ def _report_situation(run: Run, inp: FunctionCallInput, fc: FunctionCall) -> Non
 
 
 def _answer_branch(step: dict, fc: FunctionCall) -> tuple[str, list[int] | None, bool]:
-    """ask 단계에서 이 확인 응답이 갈 분기, 저장할 값 묶음, 관찰값으로 분기했는지."""
-    if step["slot"]:
-        value = getattr(fc.observation, step["slot_key"])
-        branch = slot_branch(step, [value]) if value != -1 else None
-        if branch:
-            return branch, [value], True
+    """ask 단계에서 이 확인 응답이 갈 분기, 분기 근거 값 묶음, 사용자가 그 slot 값을 직접 말했는지."""
+    said = getattr(fc.observation, step["slot_key"]) if step["slot"] else -1
+    branch = slot_branch(step, [said]) if said != -1 else None
+    if branch:
+        return branch, [said], True
     answer = fc.args["answer"]
     if answer == 3:
-        return "on_unknown", None, False
+        return "on_unknown", None, said != -1
     branch = "on_yes" if answer == 1 else "on_no"
     allowed = (step["slot_yes"] if answer == 1 else step["slot_no"]) if step["slot"] else None
-    return branch, allowed, False
+    # 직접 말한 값이 질문 목록 밖이면(숨쉬기 곤란 질문에 "네, 숨을 거의 안 쉬어요") 분기는 네·아니요대로,
+    # 기억하는 값은 직접 말한 값 그대로 둔다(2026-10-29 팀 결정)
+    return branch, allowed, said != -1
 
 
 def _answer_check(run: Run, inp: FunctionCallInput, fc: FunctionCall) -> None:
@@ -147,11 +148,11 @@ def _answer_check(run: Run, inp: FunctionCallInput, fc: FunctionCall) -> None:
         ask_again(run)  # 질문이 바뀌어 있으면 그 답을 쓰지 않고 현재 질문을 다시 묻는다
         return
     if step["kind"] == "ask":
-        branch, allowed, by_value = _answer_branch(step, fc)
+        branch, allowed, said = _answer_branch(step, fc)
         if branch == "on_unknown":
             run.say_template("T_UNKNOWN")
         elif allowed is not None:
-            if not by_value:
+            if not said:
                 run.s.observation[step["slot_key"]] = ObservedValue(
                     allowed=list(allowed), source="answer", step_id=step["step_id"], record_id=run.user_record_id,
                     routing_no=run.s.routing_no, at=run.ctx.iso())
