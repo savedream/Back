@@ -39,11 +39,12 @@ pip install -e ".[dev]"
 
 | 명령어 | 설명 |
 | --- | --- |
-| `uvicorn app.main:app --host 127.0.0.1 --port 8000` | 개발 서버 실행 |
+| `python -m app.run` | 개발 서버 실행 (host·port는 `SALYEO_HOST`·`SALYEO_PORT`, 기본 127.0.0.1:8000) |
 | `pytest -q` | 테스트 |
 | `python tools/check_manual_db.py` | 매뉴얼 DB 검사 |
 
 설정값은 `SALYEO_` 접두사 환경변수로 바꿀 수 있습니다 (예: `SALYEO_PORT=9000`).
+`uvicorn app.main:app`으로도 뜨지만, 그때는 이벤트 스트림(`/api/events`)을 연 채 끄면 `--timeout-graceful-shutdown`까지(안 주면 끝없이) 기다립니다.
 
 ---
 

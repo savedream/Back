@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     port: int = 8000
     # 기본 Swagger(/docs)는 CDN 스크립트를 불러오므로 개발 중에만 켠다
     enable_docs: bool = False
+    # 서버를 끌 때 열린 연결이 끝나기를 기다리는 최대 시간(초, uvicorn timeout_graceful_shutdown). TODO(미정: 임시값)
+    shutdown_timeout_s: float = 3
 
     # 경로
     manual_db_path: Path = BACKEND_DIR / "data" / "manual_db.json"

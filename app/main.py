@@ -1,6 +1,7 @@
 """FastAPI 앱.
 
-실행: uvicorn app.main:app --host 127.0.0.1 --port 8000 (워커 1개, --reload 없이)
+실행: python -m app.run (app/run.py, 워커 1개, reload 없이. host·port는 SALYEO_HOST·SALYEO_PORT)
+uvicorn app.main:app으로도 뜨지만, 그때는 스트림을 연 채 끄면 --timeout-graceful-shutdown까지(안 주면 끝없이) 기다린다.
 """
 from contextlib import asynccontextmanager
 
