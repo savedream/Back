@@ -8,7 +8,8 @@ import pytest
 
 from app.services.procedure_engine import service as service_module
 from app.services.procedure_engine.actions import EngineResult
-from app.services.procedure_engine.inputs import LocationUpdateInput, SpeechActivityInput
+from app.schemas.device import DeviceCommand
+from app.services.procedure_engine.inputs import DeviceButtonInput, LocationUpdateInput, SpeechActivityInput
 from tests.unit.engine_kit import FIX, ids
 from tests.unit.shell_kit import ShellKit, until_idle, until_speaking
 
@@ -90,6 +91,24 @@ async def test_new_position_cuts_speech_in_progress(kit):
               if r.kind == "kit_guidance" and r.utterance.template_id is None]
     assert played == [("EM-03", "cut"), ("EM03-01", "cut"), ("EM03-04", "done")]
     assert ids(kit.spoken)[-2:] == [("intro", "EM-03"), ("step", "EM03-04")]  # EM03-01은 화면에도 내지 않음
+
+
+async def test_button_during_guidance_does_not_cut_it(kit):
+    await kit.say("사람이 쓰러졌는데 숨을 안 쉬어")
+    kit.speaker.hold()
+    already = len(kit.speaker.spoken)
+    await kit.engine.submit(kit.turn("아니요 대답 없어요"))
+    await until_speaking(kit.speaker, already)  # EM01-02를 읽는 중
+    button = DeviceButtonInput(turn_id="t_btn", command=DeviceCommand(object=5, type=1, source="button"))
+    result = await kit.engine.submit(button)
+    assert result.mode == "append"
+    kit.speaker.release()
+    await kit.settle()
+    played = [(r.utterance.template_id or r.utterance.step_id, r.played) for r in kit.records.records
+              if r.kind == "kit_guidance"][-6:]
+    assert played == [("EM01-02", "done"), ("EM01-03", "done"), ("T_GPS_OK", "done"), ("EM01-05", "done"),
+                      ("T_DEV_VOL_UP", "done"), ("EM01-05", "done")]  # 119·좌표 안내를 끝까지 읽고 음량 확인 뒤 다시 묻는다
+    assert kit.state.volume == 80
 
 
 async def test_engine_device_runs_and_result_comes_back(kit):

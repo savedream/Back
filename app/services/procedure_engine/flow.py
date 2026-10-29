@@ -127,10 +127,9 @@ def ask(run: Run, step: dict, speed: int = 0) -> None:
 
 
 def ask_again(run: Run) -> None:
-    """질문 중이면 현재 질문을 다시 묻는다(재질문은 진행 중인 낭독을 끊고 바로)."""
+    """질문 중이면 현재 질문을 다시 묻는다. 위치가 그대로라 읽던 안내를 끊지 않고 그 뒤에 붙인다(append)."""
     step = current_step(run)
     if step is not None and step["kind"] == "ask":
-        run.preempt()
         ask(run, step)
 
 
