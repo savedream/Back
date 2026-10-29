@@ -32,6 +32,7 @@ class EngineKit:
         self.model = FakeModel()
         self.save_ok = True
         self.spoken: list[Utterance] = []
+        self.say_actions: list[SayAction] = []
         self.records: list = []
         self.devices: list = []
         self.events: list = []
@@ -52,13 +53,14 @@ class EngineKit:
         for action in res.actions:
             if isinstance(action, SayAction):
                 self.spoken.append(action.utterance)
+                self.say_actions.append(action)
                 self.feed(PlaybackInput(action_id=action.action_id, event="finished", result="done"))
             elif isinstance(action, DeviceAction):
                 self.devices.append(action.command)
                 self.feed(DeviceResultInput(action_id=action.action_id, object=action.command.object, status="success"))
             elif isinstance(action, RecordAction):
                 self.records.append(action.record)
-                if action.action_id == self.state.timer_reset_record:
+                if action.wants_result:
                     self.feed(RecordSavedInput(action_id=action.action_id, ok=self.save_ok))
 
     def say(self, text: str) -> list[Utterance]:

@@ -8,7 +8,7 @@ from typing import Literal
 
 from app.schemas.device import DeviceCommand, Location
 from app.schemas.record import Record
-from app.schemas.session import SessionState
+from app.schemas.session import PendingSay, SessionState
 from app.schemas.utterance import Utterance
 from app.services.manual_db import ManualDB
 from app.services.procedure_engine.actions import DeviceAction, EngineEvent, EngineResult, RecordAction, SayAction
@@ -81,8 +81,9 @@ class Run:
 
     def say_utterance(self, u: Utterance) -> str:
         action_id = self.next_id("action", "x")
-        self.actions.append(SayAction(action_id=action_id, utterance=u))
-        self.s.pending_says[action_id] = u
+        record_id = self.next_id("record", "r")
+        self.actions.append(SayAction(action_id=action_id, utterance=u, record_id=record_id))
+        self.s.pending_says[action_id] = PendingSay(utterance=u, record_id=record_id)
         self.s.last_utterance = u
         return action_id
 
@@ -105,14 +106,14 @@ class Run:
                                          step_id=step_id))
         return action_id
 
-    def record(self, record: Record) -> str:
+    def record(self, record: Record, wants_result: bool = False) -> str:
         action_id = self.next_id("action", "x")
-        self.actions.append(RecordAction(action_id=action_id, record=record))
+        self.actions.append(RecordAction(action_id=action_id, record=record, wants_result=wants_result))
         return action_id
 
-    def record_base(self) -> dict:
-        return {"record_id": self.next_id("record", "r"), "session_id": self.s.session_id, "at": self.ctx.iso(),
-                "clock": self.ctx.clock_source, "turn_id": self.turn_id}
+    def record_base(self, record_id: str | None = None) -> dict:
+        return {"record_id": record_id or self.next_id("record", "r"), "session_id": self.s.session_id,
+                "at": self.ctx.iso(), "clock": self.ctx.clock_source, "turn_id": self.turn_id}
 
     def event(self, type: str, data: dict) -> None:
         self.events.append(EngineEvent(type=type, data=data))

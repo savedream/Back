@@ -41,9 +41,11 @@ def arm_no_speech(run: Run) -> None:
 def handle_playback(run: Run, action_id: str, event: str, result: str | None) -> None:
     if event != "finished":
         return
-    utterance = run.s.pending_says.pop(action_id, None)
-    if utterance is not None:
-        run.record(KitGuidanceRecord(**run.record_base(), utterance=utterance, played=result or "done"))
+    pending = run.s.pending_says.pop(action_id, None)
+    if pending is not None:
+        utterance = pending.utterance
+        run.record(KitGuidanceRecord(**run.record_base(pending.record_id), utterance=utterance,
+                                     played=result or "done"))
         if utterance.source == "step" and utterance.step_id:
             run.s.spoken_step_id = utterance.step_id
     if action_id == run.s.awaiting_question:

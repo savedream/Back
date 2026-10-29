@@ -164,7 +164,8 @@ def _continue_deferred(run: Run, fc: FunctionCall | None) -> bool:
 def save_timer_record(run: Run, source: str, origin_step_id: str | None) -> None:
     elapsed = run.s.timer.elapsed_s(run.ctx.now)
     run.s.timer_reset_record = run.record(DeviceResultRecord(
-        **run.record_base(), object=3, type=4, source=source, result="success", detail={"elapsed_s": elapsed}))
+        **run.record_base(), object=3, type=4, source=source, result="success", detail={"elapsed_s": elapsed}),
+        wants_result=True)
     run.s.pending_prompt = None
 
 

@@ -65,6 +65,13 @@ class PendingPrompt(BaseModel):
     waits_for_action: str | None = None  # 확인 질문 낭독이 끝나면 deadline을 건다
 
 
+class PendingSay(BaseModel):
+    """낭독이 아직 안 끝난 문장과 그 kit_guidance 기록 ID."""
+
+    utterance: Utterance
+    record_id: str
+
+
 class Alert(BaseModel):
     """절차 알림 (6-12). 그 단계 문장의 낭독이 끝나야 잰다: 끝나기 전에는 deadline이 None."""
 
@@ -135,7 +142,7 @@ class SessionState(BaseModel):
     wait_deadline: float | None = None  # wait_timeout_s가 있는 대기의 마감
     wait_timeouts: dict[str, int] = {}  # 대기 단계별 시간 초과로 넘어간 횟수(세 번이면 그 뒤로는 기다리기만)
     last_utterance: Utterance | None = None  # 반복 요청 scope 1 대상
-    pending_says: dict[str, Utterance] = {}  # 낭독이 아직 안 끝난 say 액션(action_id → 문장), 순서 유지
+    pending_says: dict[str, PendingSay] = {}  # 낭독이 아직 안 끝난 say 액션(action_id → 문장), 순서 유지
     awaiting_question: str | None = None  # 현재 질문을 읽는 say 액션. 낭독이 끝나면 무응답 15초를 잰다
     wait_waits_for: str | None = None  # 대기 시간이 있는 wait: 이 say 낭독이 끝나면 wait_deadline을 건다
     speech_active: bool = False  # 말소리를 받는 중(무응답·대기 타이머 정지, 알림 미룸)

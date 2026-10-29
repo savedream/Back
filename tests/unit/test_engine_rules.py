@@ -187,6 +187,12 @@ def test_s18b_timer_reset_save_failure_keeps_timer(kit):
     assert any(e.type == "ui.notice" and e.data["code"] == "SAVE_FAILED" for e in kit.events[before:])
 
 
+def test_kit_guidance_record_keeps_say_record_id(kit):
+    at_s1b(kit)
+    guidance = {r.record_id: r for r in kit.records if r.kind == "kit_guidance"}
+    assert [guidance[a.record_id].utterance for a in kit.say_actions] == kit.spoken
+
+
 def test_all_spoken_text_comes_from_db(kit):
     at_s5b(kit)
     kit.say("여기 어디야")

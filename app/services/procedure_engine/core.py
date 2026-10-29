@@ -51,7 +51,8 @@ def reduce(state: SessionState, inp: EngineInput, ctx: Ctx) -> EngineResult:
 
 def _barge_in(run: Run) -> None:
     """낭독 중 말하기 버튼: 남은 낭독을 버리고 엔진 위치를 아직 낭독하지 않은 첫 단계로 되돌린다(6-2)."""
-    unspoken = [u.step_id for u in run.s.pending_says.values() if u.source == "step" and u.step_id]
+    unspoken = [p.utterance.step_id for p in run.s.pending_says.values()
+                if p.utterance.source == "step" and p.utterance.step_id]
     run.s.pending_says = {}
     run.s.awaiting_question = None
     run.preempt()

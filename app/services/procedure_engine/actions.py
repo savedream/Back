@@ -19,6 +19,7 @@ class SayAction(BaseModel):
     type: Literal["say"] = "say"
     action_id: str
     utterance: Utterance
+    record_id: str  # 이 문장의 kit_guidance 기록 ID. 낭독 시작 때 guide.say에 함께 보낸다
 
 
 class DeviceAction(BaseModel):
@@ -36,6 +37,7 @@ class RecordAction(BaseModel):
     type: Literal["record"] = "record"
     action_id: str
     record: Record
+    wants_result: bool = False  # 저장 성공이 분기 조건이면 셸이 RecordSavedInput으로 돌려준다
 
 
 Action = Annotated[SayAction | DeviceAction | RecordAction, Field(discriminator="type")]
