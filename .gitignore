@@ -16,3 +16,6 @@ logs/
 
 # macOS
 .DS_Store
+
+# oh-my-claudecode 작업 상태
+.omc/

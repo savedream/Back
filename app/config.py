@@ -10,7 +10,8 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="SALYEO_", env_file=".env", extra="ignore")
 
-    # 서버. TODO(미정: 아이패드 연결) 연결 방식과 접근 제한이 정해지면 host 기본값과 인증을 다시 본다
+    # 서버. 기본값은 PC 개발용. 키트에서는 키트가 만든 전용 Wi-Fi(AP) 주소로 연다(SALYEO_HOST)
+    # 인증은 Wi-Fi 비밀번호(WPA2)로 대신해 서버에는 두지 않는다
     host: str = "127.0.0.1"
     port: int = 8000
     # 기본 Swagger(/docs)는 CDN 스크립트를 불러오므로 개발 중에만 켠다
@@ -23,7 +24,7 @@ class Settings(BaseSettings):
     # 버전 (GET /health)
     app_version: str = "1.3.0"
     # TODO(1단계): 매뉴얼 DB 로더가 생기면 meta.version에서 읽는다
-    manual_db_version: str = "v1.6"
+    manual_db_version: str = "v1.7"
     model_version: str = "v2.2"
 
     # TODO(미정: 임시값) 3초 지연 예산 배분과 실측 뒤 확정
