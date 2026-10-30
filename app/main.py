@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI
 
-from app.api import system
+from app.api import manuals, system
 from app.common.handlers import install_error_handlers
 from app.config import Settings, get_settings
 from app.core.readiness import Component, Readiness
@@ -38,6 +38,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # 인증 없음: 화면은 키트가 만든 전용 Wi-Fi(AP)에서만 접속하고, 접근은 Wi-Fi 비밀번호로 막는다
     api = APIRouter(prefix="/api")
     api.include_router(system.router)
+    api.include_router(manuals.router)
     app.include_router(api)
     return app
 
