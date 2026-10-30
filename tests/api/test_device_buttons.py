@@ -1,4 +1,4 @@
-"""기기 버튼 API (명세서 "기기"): 구조신호."""
+"""기기 버튼 API (명세서 "기기"): 구조신호, 음량."""
 import pytest
 
 from tests.scenario.kit import Kit
@@ -107,5 +107,61 @@ async def test_rescue_signal_speaker_unavailable(kit):
 
 @pytest.mark.parametrize("path", ["/api/rescue-signal/on", "/api/rescue-signal/off"])
 def test_rescue_signal_before_ready_is_503(client, path):
+    res = client.post(path)
+    assert res.status_code == 503 and res.json()["error"]["code"] == "NOT_READY"
+
+
+def volume_events(kit: Kit) -> list[dict]:
+    return [e.data for e in kit.events if e.type == "status.changed" and "speaker" in e.data]
+
+
+@pytest.mark.parametrize(("path", "volume", "template"), [("/api/volume/up", 80, "T_DEV_VOL_UP"),
+                                                          ("/api/volume/down", 60, "T_DEV_VOL_DOWN")])
+async def test_volume_shape_and_result(kit, path, volume, template):
+    """기본 음량 70에서 한 번에 10씩. 응답에 바꿀 음량, 바뀐 음량은 status.changed로도."""
+    mark = len(kit.spoken)
+    data = await press(kit, path)
+    assert data == {"turn_id": data["turn_id"], "result": "pending", "speaker": {"connected": True, "volume": volume}}
+    await kit.settle()
+    assert kit.state.volume == volume
+    assert [c.object for c in kit.parts.devices.commands] == [5]
+    assert templates_since(kit, mark) == [template]
+    assert volume_events(kit) == [{"speaker": {"volume": volume}}]
+
+
+@pytest.mark.parametrize(("path", "steps", "end"), [("/api/volume/up", 3, 100), ("/api/volume/down", 6, 10)])
+async def test_volume_already_at_end(kit, path, steps, end):
+    """끝값(10, 100)에서는 바꾸지 않고 already. 장치 명령과 status.changed도 없다."""
+    for _ in range(steps):
+        await press(kit, path)
+        await kit.settle()
+    assert kit.state.volume == end
+    sent, changed = len(kit.parts.devices.commands), len(volume_events(kit))
+    data = await press(kit, path)
+    assert data["result"] == "already" and data["speaker"]["volume"] == end
+    await kit.settle()
+    assert len(kit.parts.devices.commands) == sent and len(volume_events(kit)) == changed
+
+
+async def test_volume_queued_while_reading(kit):
+    speaker = await reading_guidance(kit)
+    data = await press(kit, "/api/volume/up")
+    assert data["result"] == "queued"
+    speaker.release()
+    await kit.settle()
+    assert kit.state.volume == 80
+    assert "T_DEV_VOL_UP" in [u.template_id for u in speaker.spoken]
+
+
+@pytest.mark.parametrize("path", ["/api/volume/up", "/api/volume/down"])
+async def test_volume_speaker_unavailable(kit, path):
+    kit.state.devices["rescue_signal"].connected = False
+    res = await kit.http.post(path)
+    assert res.status_code == 503 and res.json()["error"]["code"] == "DEVICE_UNAVAILABLE"
+    assert kit.state.volume == 70
+
+
+@pytest.mark.parametrize("path", ["/api/volume/up", "/api/volume/down"])
+def test_volume_before_ready_is_503(client, path):
     res = client.post(path)
     assert res.status_code == 503 and res.json()["error"]["code"] == "NOT_READY"

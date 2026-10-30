@@ -1,7 +1,7 @@
-"""기기 버튼 API (명세서 "기기"): 구조신호.
+"""기기 버튼 API (명세서 "기기"): 구조신호, 음량.
 
 화면 버튼을 DeviceCommand(source: button)로 바꿔 엔진 큐(device_button)에 넣는다. 음성 명령과 같은 규칙(6-10)을 탄다.
-응답은 엔진이 받아들인 결과만 바로 주고, 실제 상태는 이벤트(device.state)로 나간다.
+응답은 엔진이 받아들인 결과만 바로 주고, 실제 상태는 이벤트(device.state, status.changed)로 나간다.
 """
 from dataclasses import dataclass
 from typing import Literal
@@ -89,3 +89,38 @@ async def rescue_signal_on(request: Request):
 async def rescue_signal_off(request: Request):
     """구조신호 끄기. T_DEV_SOS_OFF를 읽고 그 문장이 끝난 직후 끈다."""
     return await _rescue_signal(request, on=False)
+
+
+class SpeakerView(BaseModel):
+    connected: bool
+    volume: int
+
+
+class VolumeOut(BaseModel):
+    turn_id: str
+    result: ButtonResult
+    speaker: SpeakerView
+
+
+async def _volume(request: Request, up: bool):
+    parts = request.app.state.parts
+    _require_speaker(parts.engine.state)
+    pressed = await _press(request, 5, 1 if up else 2)
+    state = pressed.result.state
+    speaker = SpeakerView(connected=state.devices["rescue_signal"].connected, volume=state.volume)
+    already = not _commanded(pressed.result, 5)  # 끝값(10, 100)이면 바꾸지 않는다
+    if not already:
+        parts.events.publish("status.changed", pressed.turn_id, {"speaker": {"volume": state.volume}})
+    return ok(VolumeOut(turn_id=pressed.turn_id, result=_button_result(pressed, already), speaker=speaker))
+
+
+@router.post("/volume/up", response_model=OkResponse[VolumeOut], dependencies=[Depends(require_ready)])
+async def volume_up(request: Request):
+    """안내 음성 음량을 10 올린다(최대 100). T_DEV_VOL_UP을 읽고 그 문장이 끝난 직후 바꾼다. 구조신호에는 적용하지 않는다."""
+    return await _volume(request, up=True)
+
+
+@router.post("/volume/down", response_model=OkResponse[VolumeOut], dependencies=[Depends(require_ready)])
+async def volume_down(request: Request):
+    """안내 음성 음량을 10 내린다(최소 10). T_DEV_VOL_DOWN을 읽고 그 문장이 끝난 직후 바꾼다."""
+    return await _volume(request, up=False)
