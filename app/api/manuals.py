@@ -1,10 +1,14 @@
-"""매뉴얼 API: GET /manuals.
+"""매뉴얼 API: GET /manuals, GET /manuals/{manual_id}.
 
 응급 매뉴얼 화면(보기 전용)용. 매뉴얼 DB 값을 그대로 내보내고 엔진 상태는 바꾸지 않는다.
 """
+from typing import Literal
+
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
+from app.common.error_code import ErrorCode
+from app.common.exceptions import AppError
 from app.common.response import OkResponse, ok
 from app.services.manual_db import ManualDB
 
@@ -20,6 +24,23 @@ class ManualSummary(BaseModel):
     summary: str
     featured: int | None
     icon: str
+
+
+class ViewStep(BaseModel):
+    no: int
+    kind: Literal["check", "call", "action"]
+    title: str
+    text: str
+    image: str | None
+
+
+class ManualCard(BaseModel):
+    manual_id: str
+    situation_code: int
+    name: str
+    summary: str
+    call_119: str
+    view_steps: list[ViewStep]
 
 
 def _situation_manuals(db: ManualDB) -> list[dict]:
@@ -47,3 +68,18 @@ def list_manuals(request: Request, featured: bool = False):
         for m in manuals
     ])
 
+
+@router.get("/manuals/{manual_id}", response_model=OkResponse[ManualCard])
+def get_manual(request: Request, manual_id: str):
+    """매뉴얼 보기용 카드. 엔진 단계(steps)는 내보내지 않는다. 없는 ID나 공통 절차(COM-*)는 404.
+
+    카드가 no 순서(1부터 빠짐없이)인지는 매뉴얼 DB를 적재할 때 검사한다.
+    """
+    manual = request.app.state.manual_db.manuals_by_id.get(manual_id)
+    if manual is None or manual["type"] != "situation":
+        raise AppError(ErrorCode.MANUAL_NOT_FOUND, f"{manual_id} 매뉴얼이 없습니다")
+    return ok(ManualCard(
+        manual_id=manual["manual_id"], situation_code=manual["situation_code"], name=manual["name"],
+        summary=manual["summary"], call_119=manual["call_119"],
+        view_steps=manual["view_steps"],
+    ))

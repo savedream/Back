@@ -1,7 +1,11 @@
-"""GET /api/manuals (명세서 "[매뉴얼] 매뉴얼 목록")."""
+"""GET /api/manuals, GET /api/manuals/{manual_id} (명세서 "[매뉴얼] 매뉴얼 목록", "[매뉴얼] 매뉴얼 보기용 카드")."""
 import json
 
 import pytest
+from fastapi.testclient import TestClient
+
+from app.config import Settings
+from app.main import create_app
 
 
 @pytest.fixture
@@ -62,4 +66,46 @@ def test_list_responds_before_ready(client):
     """준비 전(ready: false)에도 200. 503 NOT_READY 없음."""
     assert client.get("/api/health").json()["data"]["ready"] is False
     assert client.get("/api/manuals").status_code == 200
+    assert client.get("/api/manuals/EM-01").status_code == 200
+
+
+def test_card_shape_matches_spec(client, db):
+    """매뉴얼 필드와 view_steps만. 값은 DB 그대로, 엔진 단계(steps)는 내보내지 않는다."""
+    res = client.get("/api/manuals/EM-01")
+    assert res.status_code == 200
+    data = res.json()["data"]
+    assert set(data) == {"manual_id", "situation_code", "name", "summary", "call_119", "view_steps"}
+    manual = next(m for m in db["manuals"] if m["manual_id"] == "EM-01")
+    assert data["call_119"] == manual["call_119"] == "즉시"
+    assert data["view_steps"] == manual["view_steps"]
+    assert set(data["view_steps"][0]) == {"no", "kind", "title", "text", "image"}
+
+
+def test_cards_for_every_situation_manual(client, db):
+    """v1.7은 상황 매뉴얼 16개 모두 카드가 있고 모두 98장. no 순서대로."""
+    total = 0
+    for manual in _situations(db):
+        steps = client.get(f"/api/manuals/{manual['manual_id']}").json()["data"]["view_steps"]
+        assert [s["no"] for s in steps] == sorted(s["no"] for s in steps)
+        total += len(steps)
+    assert total == sum(len(m["view_steps"]) for m in _situations(db)) == 98
+
+
+def test_card_empty_view_steps(tmp_path, db):
+    """view_steps가 빈 매뉴얼은 빈 목록을 그대로 준다."""
+    em02 = next(m for m in db["manuals"] if m["manual_id"] == "EM-02")
+    em02["view_steps"] = []
+    path = tmp_path / "manual_db.json"
+    path.write_text(json.dumps(db, ensure_ascii=False), encoding="utf-8")
+    with TestClient(create_app(Settings(_env_file=None, manual_db_path=path))) as c:
+        assert c.get("/api/manuals/EM-02").json()["data"]["view_steps"] == []
+
+
+@pytest.mark.parametrize("manual_id", ["EM-99", "COM-SAFE"])
+def test_card_not_found(client, manual_id):
+    """없는 manual_id나 공통 절차(COM-*)는 404 MANUAL_NOT_FOUND."""
+    res = client.get(f"/api/manuals/{manual_id}")
+    assert res.status_code == 404
+    assert res.json() == {"ok": False, "error": {"code": "MANUAL_NOT_FOUND",
+                                                 "message": f"{manual_id} 매뉴얼이 없습니다"}}
 
