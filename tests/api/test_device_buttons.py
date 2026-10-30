@@ -1,4 +1,4 @@
-"""기기 버튼 API (명세서 "기기"): 구조신호, 음량."""
+"""기기 버튼 API (명세서 "기기"): 구조신호, 음량, 타이머."""
 import pytest
 
 from tests.scenario.kit import Kit
@@ -163,5 +163,60 @@ async def test_volume_speaker_unavailable(kit, path):
 
 @pytest.mark.parametrize("path", ["/api/volume/up", "/api/volume/down"])
 def test_volume_before_ready_is_503(client, path):
+    res = client.post(path)
+    assert res.status_code == 503 and res.json()["error"]["code"] == "NOT_READY"
+
+
+async def test_timer_start_pause_resume(kit):
+    """시작 → 30초 뒤 일시정지 → 이어서 재기. 응답의 timer는 엔진이 받아들인 뒤의 상태."""
+    mark = len(kit.spoken)
+    data = await press(kit, "/api/timer/start")
+    assert list(data) == ["turn_id", "result", "timer"] and data["result"] == "pending"
+    started_at = kit.state.timer.started_at
+    assert data["timer"] == {"object": 3, "status": "running", "elapsed_s": 0, "started_at": started_at}
+    assert started_at is not None
+    await kit.settle()
+    await kit.advance(30)
+
+    data = await press(kit, "/api/timer/pause")
+    assert data["result"] == "pending"
+    assert data["timer"] == {"object": 3, "status": "paused", "elapsed_s": 30, "started_at": started_at}
+    await kit.settle()
+    await kit.advance(10)  # 일시정지 중에는 늘지 않는다
+
+    data = await press(kit, "/api/timer/start")
+    assert data["result"] == "pending"
+    assert data["timer"] == {"object": 3, "status": "running", "elapsed_s": 30, "started_at": started_at}
+    await kit.settle()
+    assert templates_since(kit, mark) == ["T_DEV_TIMER_START", "T_DEV_TIMER_PAUSE", "T_DEV_TIMER_RESUME"]
+
+
+@pytest.mark.parametrize(("path", "template"), [("/api/timer/start", "T_DEV_ALREADY_ON"),
+                                                ("/api/timer/pause", "T_DEV_ALREADY_OFF")])
+async def test_timer_already(kit, path, template):
+    """도는 중에 start, 도는 중이 아닌데 pause면 already."""
+    if path.endswith("/start"):
+        await press(kit, "/api/timer/start")
+        await kit.settle()
+    before, mark = kit.state.timer, len(kit.spoken)
+    data = await press(kit, path)
+    assert data["result"] == "already" and data["timer"]["status"] == before.status
+    await kit.settle()
+    assert kit.state.timer == before
+    assert templates_since(kit, mark) == [template]
+
+
+async def test_timer_queued_while_reading(kit):
+    speaker = await reading_guidance(kit)
+    data = await press(kit, "/api/timer/start")
+    assert data["result"] == "queued"
+    speaker.release()
+    await kit.settle()
+    assert kit.state.timer.status == "running"
+    assert "T_DEV_TIMER_START" in [u.template_id for u in speaker.spoken]
+
+
+@pytest.mark.parametrize("path", ["/api/timer/start", "/api/timer/pause"])
+def test_timer_before_ready_is_503(client, path):
     res = client.post(path)
     assert res.status_code == 503 and res.json()["error"]["code"] == "NOT_READY"

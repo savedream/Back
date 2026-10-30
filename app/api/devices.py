@@ -1,7 +1,7 @@
-"""기기 버튼 API (명세서 "기기"): 구조신호, 음량.
+"""기기 버튼 API (명세서 "기기"): 구조신호, 음량, 타이머.
 
 화면 버튼을 DeviceCommand(source: button)로 바꿔 엔진 큐(device_button)에 넣는다. 음성 명령과 같은 규칙(6-10)을 탄다.
-응답은 엔진이 받아들인 결과만 바로 주고, 실제 상태는 이벤트(device.state, status.changed)로 나간다.
+응답은 엔진이 받아들인 결과만 바로 주고, 실제 상태는 이벤트(device.state, status.changed, session.updated)로 나간다.
 """
 from dataclasses import dataclass
 from typing import Literal
@@ -14,8 +14,9 @@ from app.common.exceptions import AppError
 from app.common.response import OkResponse, ok
 from app.core.readiness import require_ready
 from app.schemas.device import DeviceCommand, DeviceState
+from app.schemas.record import DeviceResultRecord
 from app.schemas.session import SessionState
-from app.services.procedure_engine.actions import DeviceAction, EngineResult
+from app.services.procedure_engine.actions import DeviceAction, EngineResult, RecordAction
 from app.services.procedure_engine.inputs import DeviceButtonInput
 
 router = APIRouter()
@@ -124,3 +125,51 @@ async def volume_up(request: Request):
 async def volume_down(request: Request):
     """안내 음성 음량을 10 내린다(최소 10). T_DEV_VOL_DOWN을 읽고 그 문장이 끝난 직후 바꾼다."""
     return await _volume(request, up=False)
+
+
+class TimerView(BaseModel):
+    object: int = 3
+    status: Literal["idle", "running", "paused"]
+    elapsed_s: int
+    started_at: str | None
+
+
+class TimerOut(BaseModel):
+    turn_id: str
+    result: ButtonResult
+    timer: TimerView
+
+
+def _timer_view(request: Request, state: SessionState) -> TimerView:
+    timer = state.timer
+    return TimerView(status=timer.status, elapsed_s=timer.elapsed_s(request.app.state.parts.clock.now()),
+                     started_at=timer.started_at)
+
+
+def _recorded_result(result: EngineResult, obj: int, typ: int) -> str | None:
+    """엔진이 남긴 그 버튼의 기기 결과 기록(device_result)의 result. 타이머는 장치 명령이 없어 기록으로 본다."""
+    for action in result.actions:
+        record = action.record if isinstance(action, RecordAction) else None
+        if isinstance(record, DeviceResultRecord) and (record.object, record.type) == (obj, typ):
+            return record.result
+    return None
+
+
+async def _timer(request: Request, typ: int):
+    pressed = await _press(request, 3, typ)
+    already = _recorded_result(pressed.result, 3, typ) == "already"  # 도는 중에 start, 도는 중이 아닌데 pause
+    return ok(TimerOut(turn_id=pressed.turn_id, result=_button_result(pressed, already),
+                       timer=_timer_view(request, pressed.result.state)))
+
+
+@router.post("/timer/start", response_model=OkResponse[TimerOut], dependencies=[Depends(require_ready)])
+async def timer_start(request: Request):
+    """타이머 시작·재개. 멈춰 있으면 T_DEV_TIMER_START, 일시정지 중이면 T_DEV_TIMER_RESUME을 읽는다.
+    시간 표시는 timer.tick·session.updated로 바꾼다."""
+    return await _timer(request, 1)
+
+
+@router.post("/timer/pause", response_model=OkResponse[TimerOut], dependencies=[Depends(require_ready)])
+async def timer_pause(request: Request):
+    """타이머 일시정지. T_DEV_TIMER_PAUSE(지금까지 잰 시간)를 읽는다. 경과 확인(type 2)은 음성으로만."""
+    return await _timer(request, 3)
