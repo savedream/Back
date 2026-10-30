@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     # 경로
     manual_db_path: Path = BACKEND_DIR / "data" / "manual_db.json"
     records_db_path: Path = BACKEND_DIR / "records.db"
+    # 정적 파일(/static). 매뉴얼 아이콘·그림(static/manuals/)은 UI가 제공한다
+    static_dir: Path = BACKEND_DIR / "static"
 
     # 버전 (GET /health). 매뉴얼 DB 버전은 적재한 DB의 meta.version에서 읽는다
     app_version: str = "1.3.0"

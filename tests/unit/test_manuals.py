@@ -109,3 +109,14 @@ def test_card_not_found(client, manual_id):
     assert res.json() == {"ok": False, "error": {"code": "MANUAL_NOT_FOUND",
                                                  "message": f"{manual_id} 매뉴얼이 없습니다"}}
 
+
+def test_static_manual_icon(tmp_path):
+    """그림 파일은 /static/manuals/에서 정적 파일로. 폴더나 파일이 없으면 404."""
+    with TestClient(create_app(Settings(_env_file=None, static_dir=tmp_path / "none"))) as c:
+        assert c.get("/static/manuals/EM-01.svg").status_code == 404
+    (tmp_path / "manuals").mkdir()
+    (tmp_path / "manuals" / "EM-01.svg").write_text("<svg/>", encoding="utf-8")
+    with TestClient(create_app(Settings(_env_file=None, static_dir=tmp_path))) as c:
+        res = c.get("/static/manuals/EM-01.svg")
+        assert res.status_code == 200
+        assert res.text == "<svg/>"

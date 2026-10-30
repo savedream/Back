@@ -5,6 +5,7 @@
 from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from app.api import manuals, system
 from app.common.handlers import install_error_handlers
@@ -40,6 +41,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     api.include_router(system.router)
     api.include_router(manuals.router)
     app.include_router(api)
+    # 정적 파일 폴더가 없어도 서버는 뜨고 /static 아래는 404
+    if settings.static_dir.is_dir():
+        app.mount("/static", StaticFiles(directory=settings.static_dir), name="static")
     return app
 
 
