@@ -4,7 +4,7 @@
 응답은 엔진이 받아들인 결과만 바로 주고, 실제 상태는 이벤트(device.state, status.changed, session.updated)로 나간다.
 """
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
@@ -173,3 +173,39 @@ async def timer_start(request: Request):
 async def timer_pause(request: Request):
     """타이머 일시정지. T_DEV_TIMER_PAUSE(지금까지 잰 시간)를 읽는다. 경과 확인(type 2)은 음성으로만."""
     return await _timer(request, 3)
+
+
+class TimerResetIn(BaseModel):
+    confirm: Any = None  # 화면 확인 창을 거쳐 true일 때만 초기화한다
+
+
+class TimerResetOut(BaseModel):
+    turn_id: str
+    result: Literal["done", "already"]
+    timer: TimerView
+
+
+@router.post("/timer/reset", response_model=OkResponse[TimerResetOut], dependencies=[Depends(require_ready)])
+async def timer_reset(request: Request, body: TimerResetIn | None = None):
+    """타이머 초기화. 음성 확인 질문(timer_reset)에 네라고 한 것과 같다(6-7): 지금 구간 기록 저장 → 초기화 →
+    T_DEV_TIMER_RESET. 저장 결과를 기다렸다가 응답하고, 실패하면 초기화하지 않고(T_DEV_TIMER_KEEP) 500 SAVE_FAILED.
+    시작 전(idle)이면 저장할 구간이 없어 already."""
+    if body is None or body.confirm is not True:
+        raise AppError(ErrorCode.CONFIRM_REQUIRED, "타이머 초기화는 confirm: true가 필요합니다")
+    parts = request.app.state.parts
+    subscription = parts.events.subscribe()  # 엔진이 저장 결과를 처리하면 상태가 바뀌며 이벤트가 나온다
+    try:
+        pressed = await _press(request, 3, 4)
+        saving = pressed.result.state.timer_reset_record
+        if saving is None:
+            return ok(TimerResetOut(turn_id=pressed.turn_id, result="already",
+                                    timer=_timer_view(request, pressed.result.state)))
+        # 저장은 읽던 안내 문장 뒤에 차례가 오므로, 그동안 바뀐 상태를 이벤트마다 확인한다
+        while parts.engine.state.timer_reset_record == saving:
+            await subscription.get()
+    finally:
+        subscription.close()
+    state = parts.engine.state
+    if state.timer.status != "idle":
+        raise AppError(ErrorCode.SAVE_FAILED, "기록을 저장하지 못해 타이머를 초기화하지 않았습니다")
+    return ok(TimerResetOut(turn_id=pressed.turn_id, result="done", timer=_timer_view(request, state)))

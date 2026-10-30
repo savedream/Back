@@ -1,4 +1,6 @@
 """기기 버튼 API (명세서 "기기"): 구조신호, 음량, 타이머."""
+import asyncio
+
 import pytest
 
 from tests.scenario.kit import Kit
@@ -219,4 +221,78 @@ async def test_timer_queued_while_reading(kit):
 @pytest.mark.parametrize("path", ["/api/timer/start", "/api/timer/pause"])
 def test_timer_before_ready_is_503(client, path):
     res = client.post(path)
+    assert res.status_code == 503 and res.json()["error"]["code"] == "NOT_READY"
+
+
+async def running_timer(kit: Kit, seconds: float) -> None:
+    await press(kit, "/api/timer/start")
+    await kit.settle()
+    await kit.advance(seconds)
+
+
+def timer_records(kit: Kit) -> list:
+    return [r for r in kit.records if r.kind == "device_result" and (r.object, r.type) == (3, 4)]
+
+
+async def test_timer_reset_saves_then_resets(kit):
+    """지금 구간을 기록에 남기고 시작 전으로 돌린다. 저장 결과를 기다렸다가 done."""
+    await running_timer(kit, 42)
+    mark = len(kit.spoken)
+    data = await press(kit, "/api/timer/reset", json={"confirm": True})
+    assert data == {"turn_id": data["turn_id"], "result": "done",
+                    "timer": {"object": 3, "status": "idle", "elapsed_s": 0, "started_at": None}}
+    await kit.settle()
+    [record] = timer_records(kit)
+    assert record.saved and record.source == "button" and record.detail == {"elapsed_s": 42}
+    assert templates_since(kit, mark) == ["T_DEV_TIMER_RESET"]
+
+
+@pytest.mark.parametrize("kwargs", [{}, {"json": {}}, {"json": {"confirm": False}}, {"json": {"confirm": "true"}}])
+async def test_timer_reset_needs_confirm(kit, kwargs):
+    await running_timer(kit, 5)
+    res = await kit.http.post("/api/timer/reset", **kwargs)
+    assert res.status_code == 400
+    assert res.json() == {"ok": False, "error": {"code": "CONFIRM_REQUIRED",
+                                                 "message": "타이머 초기화는 confirm: true가 필요합니다"}}
+    assert kit.state.timer.status == "running"
+
+
+async def test_timer_reset_already_when_idle(kit):
+    """저장할 구간이 없으면 already. 버튼을 누른 기록만 already로 남는다."""
+    data = await press(kit, "/api/timer/reset", json={"confirm": True})
+    assert data["result"] == "already" and data["timer"]["status"] == "idle"
+    await kit.settle()
+    assert [(r.result, r.detail) for r in timer_records(kit)] == [("already", None)]
+
+
+async def test_timer_reset_save_failed_keeps_timer(kit):
+    """저장에 실패하면 초기화하지 않고 T_DEV_TIMER_KEEP, 500 SAVE_FAILED."""
+    await running_timer(kit, 20)
+    mark = len(kit.spoken)
+    kit.parts.records.fail_next_save("device_result")
+    res = await kit.http.post("/api/timer/reset", json={"confirm": True})
+    assert res.status_code == 500
+    assert res.json() == {"ok": False, "error": {"code": "SAVE_FAILED",
+                                                 "message": "기록을 저장하지 못해 타이머를 초기화하지 않았습니다"}}
+    await kit.settle()
+    assert kit.state.timer.status == "running" and kit.state.timer.elapsed_s(kit.clock.now()) == 20
+    assert templates_since(kit, mark) == ["T_DEV_TIMER_KEEP"]
+
+
+async def test_timer_reset_waits_for_reading(kit):
+    """안내 문장을 읽는 중이면 저장은 그 뒤에 차례가 온다. 응답도 저장 결과가 나올 때까지 기다린다."""
+    await running_timer(kit, 10)
+    speaker = await reading_guidance(kit)
+    reply = asyncio.ensure_future(kit.http.post("/api/timer/reset", json={"confirm": True}))
+    for _ in range(50):
+        await asyncio.sleep(0)
+    assert not reply.done() and kit.state.timer.status == "running"
+    speaker.release()
+    res = await reply
+    assert res.status_code == 200 and res.json()["data"]["result"] == "done"
+    assert kit.state.timer.status == "idle"
+
+
+def test_timer_reset_before_ready_is_503(client):
+    res = client.post("/api/timer/reset", json={"confirm": True})
     assert res.status_code == 503 and res.json()["error"]["code"] == "NOT_READY"
