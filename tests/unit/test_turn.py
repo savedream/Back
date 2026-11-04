@@ -79,3 +79,20 @@ def test_turn_lock_released_on_error():
         with lock.turn():
             raise RuntimeError("턴 처리 중 오류")
     assert not lock.busy
+
+
+def test_turn_lock_release_only_by_owner():
+    """요청 두 개에 걸치는 말하기 버튼 턴(결정 D1): 주인이 아닌 턴 번호로는 놓지 않고, 두 번 놓아도 그대로다."""
+    lock = TurnLock()
+    first = lock.acquire()
+    with pytest.raises(AppError) as e:
+        lock.acquire("이미 듣거나 처리 중입니다")
+    assert e.value.code is ErrorCode.AUDIO_BUSY and e.value.message == "이미 듣거나 처리 중입니다"
+    lock.release("t_9999")
+    assert lock.busy
+    lock.release(first)
+    second = lock.acquire()
+    lock.release(first)  # 이미 놓은 앞 턴이 다시 놓아도 다음 턴의 잠금은 남는다
+    assert lock.busy and (first, second) == ("t_0001", "t_0002")
+    lock.release(second)
+    assert not lock.busy

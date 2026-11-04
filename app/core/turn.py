@@ -91,22 +91,32 @@ class TurnLock:
     엔진이 그 턴 입력을 처리한 뒤 놓는다. 잡혀 있으면 409 AUDIO_BUSY."""
 
     def __init__(self) -> None:
-        self._busy = False
+        self._owner: str | None = None  # 잠금을 잡은 턴
         self._count = 0
 
     @property
     def busy(self) -> bool:
-        return self._busy
+        return self._owner is not None
+
+    def acquire(self, busy_message: str = "다른 턴을 처리 중입니다") -> str:
+        """잠금을 잡고 그 턴 번호를 돌려준다. 요청 두 개에 걸치는 말하기 버튼 턴(start → stop 뒤 처리)용(결정 D1)."""
+        if self._owner is not None:
+            raise AppError(ErrorCode.AUDIO_BUSY, busy_message)
+        self._owner = self.next_id()
+        return self._owner
+
+    def release(self, turn_id: str) -> None:
+        """그 턴이 잡은 잠금만 놓는다. 주인이 아니면(이미 놓았거나 다른 턴) 아무것도 하지 않는다."""
+        if self._owner == turn_id:
+            self._owner = None
 
     @contextmanager
     def turn(self) -> Iterator[str]:
-        if self._busy:
-            raise AppError(ErrorCode.AUDIO_BUSY, "다른 턴을 처리 중입니다")
-        self._busy = True
+        turn_id = self.acquire()
         try:
-            yield self.next_id()
+            yield turn_id
         finally:
-            self._busy = False
+            self.release(turn_id)
 
     def next_id(self) -> str:
         """잠그지 않고 턴 번호만 하나 매긴다(턴 잠금을 쓰지 않는 세션 초기화용)."""
