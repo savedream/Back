@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     sse_ping_s: float = 15
     # 기기 상태(GET /api/devices)의 장치·시스템 칸을 다시 읽는 간격(초, 엔진 시계). 바뀐 부분은 status.changed로 보낸다
     device_status_interval_s: float = 5.0  # 임시값(미정)
+    # 키트 끄기 때 처리 중인 턴(STT·모델)이 끝나기를 기다리는 최대 시간(모델 시간 제한 5초 + 여유). 임시값(미정)
+    shutdown_turn_wait_s: float = 6.0
 
     # 기록 저장 재시도 간격(엔진 시계 기준, 시작값에서 두 배씩, 최대값까지). TODO(미정: 임시값)
     record_retry_base_s: float = 1

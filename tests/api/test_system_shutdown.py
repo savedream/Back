@@ -7,7 +7,7 @@ import asyncio
 import httpx
 import pytest
 
-from tests.api.test_utterances import until
+from tests.api.test_utterances import hold_model, until
 from tests.scenario.kit import Kit
 from tests.unit.shell_kit import ScriptSpeaker, until_speaking
 
@@ -139,6 +139,25 @@ async def test_save_failure_unfreezes_and_keeps_running(kit):
     assert not kit.parts.engine.frozen and not kit.parts.shutdown.requested
     assert kit.parts.devices.on == {2} and kit.state.devices["metronome"].status == "on"
     assert (await kit.post("네")).status_code == 200
+
+
+async def test_shutdown_waits_for_turn_in_flight(kit):
+    """처리 중인 턴(모델 추론 중)이 있으면 끝나기를 기다린 뒤 저장하고 소리 기능을 끈다(리뷰 지적, 기다림 상한은 임시값).
+    끈 뒤에 그 턴이 구조신호를 다시 켜지 않고, 그 턴의 발화 기록도 저장된다."""
+    kit.model.add("구조 신호 켜 줘", "<maum_4>(object=4, type=1)<maum_end>")
+    gate = hold_model(kit)
+    turn = asyncio.create_task(kit.post("구조 신호 켜 줘"))
+    await until(lambda: kit.app.state.turn_lock.busy)
+    shutdown = asyncio.create_task(kit.http.post("/api/system/shutdown", json=CONFIRM))
+    for _ in range(50):
+        await asyncio.sleep(0)
+    assert not shutdown.done()  # 턴이 끝나기를 기다린다
+    gate.set()
+    res, said = await shutdown, await turn
+    await kit.settle()
+    assert res.status_code == 200 and said.status_code == 200
+    assert kit.state.devices["rescue_signal"].want == "off" and 4 not in kit.parts.devices.on
+    assert [r.saved for r in kit.records if r.kind == "user_utterance"] == [True]
 
 
 async def test_shutdown_discards_button_recording_and_keeps_mic_paused(kit):

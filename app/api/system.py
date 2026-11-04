@@ -1,4 +1,5 @@
 """시스템 API: GET /health, POST /api/system/shutdown."""
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Request
@@ -58,6 +59,7 @@ async def shutdown(request: Request, background: BackgroundTasks, body: Shutdown
     engine = parts.engine
     engine.freeze()
     try:
+        await _settle_turn(state, state.settings.shutdown_turn_wait_s)
         await parts.records.flush()
         _, left = await parts.records.retry_now()
         if left:
@@ -75,3 +77,12 @@ async def shutdown(request: Request, background: BackgroundTasks, body: Shutdown
     records = await parts.records.session_records(engine.state.session_id) if engine.state is not None else None
     background.add_task(parts.shutdown.shutdown)
     return ok(ShutdownOut(saved_records=sum(r.saved for r in records or []), shutting_down=True))
+
+
+async def _settle_turn(state, limit_s: float) -> None:
+    """처리 중인 턴(말하기 완료 뒤 STT·모델, 문장 턴)이 끝나기를 기다린다. 동결은 새 입력만 막으므로, 기다리지 않으면 그 턴이
+    끈 뒤에 안내를 읽거나 소리 기능을 다시 켜고 그 기록이 저장에서 빠진다. 녹음 중인 턴은 기다리지 않는다(뒤에서 버림)."""
+    loop = asyncio.get_running_loop()
+    end = loop.time() + limit_s
+    while state.turn_lock.busy and state.speech.turn_id is None and loop.time() < end:
+        await asyncio.sleep(0.01)
