@@ -29,6 +29,9 @@ class Readiness:
 
 
 def require_ready(request: Request) -> None:
-    """음성·엔진이 필요한 API에 붙이는 의존성. 준비 전이면 503 NOT_READY."""
-    if not request.app.state.readiness.ready:
+    """음성·엔진이 필요한 API에 붙이는 의존성. 준비 전이면 503 NOT_READY, 키트를 끄는 중(엔진 동결)이어도 503 NOT_READY."""
+    state = request.app.state
+    if not state.readiness.ready:
         raise AppError(ErrorCode.NOT_READY)
+    if state.parts.engine.frozen:
+        raise AppError(ErrorCode.NOT_READY, "종료 중입니다")
