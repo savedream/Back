@@ -14,6 +14,10 @@ from app.services.procedure_engine.inputs import DeviceResultInput, MicInput
 from tests.scenario.kit import Kit
 
 MB = 1024 * 1024
+# 명세서 GET /api/devices 응답 예시의 키 순서
+SPEC_KEYS = ["gps", "microphone", "speaker", "buzzer", "metronome", "rescue_signal", "timer", "models", "manual_db",
+             "battery", "storage", "clock"]
+SOUND_KEYS = ["object", "name", "connected", "status", "held_by", "queued", "last_result", "last_error", "detail"]
 
 
 @pytest.fixture
@@ -89,3 +93,70 @@ async def test_refresher_stops_with_app(disk):
         task = kit.app.state.device_status._task
         assert not task.done()
     assert task.cancelled()
+
+
+async def get_devices(kit: Kit) -> dict:
+    res = await kit.http.get("/api/devices")
+    assert res.status_code == 200, res.text
+    assert res.json()["ok"] is True
+    return res.json()["data"]
+
+
+async def test_devices_shape_matches_spec(kit):
+    """명세 예시 모양 그대로. 가짜에서 모르는 값(배터리, TTS 문장 캐시, 모델·캐시 용량)은 null(계획 기본값 8)."""
+    data = await get_devices(kit)
+    assert list(data) == SPEC_KEYS
+    assert data["gps"] == {"connected": True, "fix": True, "accuracy_m": 8, "satellites": 7}
+    assert data["microphone"] == {"connected": True, "state": "armed"}
+    assert data["speaker"] == {"connected": True, "volume": 70} and data["buzzer"] == {"connected": True}
+    metronome, rescue = data["metronome"], data["rescue_signal"]
+    assert list(metronome) == SOUND_KEYS and list(rescue) == SOUND_KEYS  # 엔진 내부 칸(want)은 뺀다
+    assert (metronome["object"], metronome["status"], metronome["detail"]) == (2, "off", {"bpm": 110})
+    assert (rescue["object"], rescue["status"], rescue["detail"]) == (4, "off", {"output": "speaker"})
+    assert data["timer"] == {"object": 3, "status": "idle", "elapsed_s": 0, "started_at": None}
+    assert data["models"] == {"llm": {"loaded": True, "warmed": True, "version": "v2.2"}, "vad": {"loaded": True},
+                              "stt": {"loaded": True}, "tts": {"loaded": True, "cached_sentences": None}}
+    assert data["manual_db"] == {"loaded": True, "version": kit.parts.engine.db.version}
+    assert data["battery"] is None
+    size = kit.app.state.settings.manual_db_path.stat().st_size
+    assert data["storage"] == {"unsaved_records": 0,
+                               "data_mb": {"manual_db": round(size / MB, 2), "models": None, "tts_cache": None},
+                               "free_mb": 2048}
+    assert data["clock"] == {"source": "unsynced"}
+
+
+async def test_engine_parts_are_current_and_device_parts_are_refreshed(kit, disk):
+    """엔진 상태 칸(소리 기능·타이머·음량·미저장 기록 수)은 요청 때 지금 값이고, 장치·시스템 칸은 다음 갱신까지 그대로다."""
+    await kit.say("사람이 쓰러졌는데 숨을 안 쉬어")
+    await kit.say("아니요 대답 없어요")
+    kit.parts.records.fail_next_save("user_utterance")
+    await kit.say("아니요")  # 가슴압박 대기: 메트로놈 켜짐, 타이머 돎
+    assert (await kit.http.post("/api/rescue-signal/on")).status_code == 200
+    await kit.settle()
+    kit.clock.advance(3)
+    kit.parts.gps.lose_fix()
+    disk["free"] = 100 * MB
+    data = await get_devices(kit)
+    assert data["metronome"]["status"] == "on" and data["rescue_signal"]["status"] == "on"
+    assert data["timer"]["status"] == "running" and data["timer"]["elapsed_s"] == 3
+    assert data["microphone"] == {"connected": True, "state": "blocked"}  # 구조신호가 울리는 동안
+    assert data["storage"]["unsaved_records"] == 1
+    assert data["gps"]["fix"] is True and data["storage"]["free_mb"] == 2048  # 아직 갱신 전
+    await refreshed(kit, 2)
+    data = await get_devices(kit)
+    assert data["gps"]["fix"] is False and data["storage"]["free_mb"] == 100
+
+
+async def test_devices_before_ready(app, client):
+    """준비 전(엔진 시작 전)에도 기본 상태로 200. 모델은 적재 전, 매뉴얼 DB는 적재됨, 마이크는 blocked."""
+    res = client.get("/api/devices")
+    assert res.status_code == 200
+    data = res.json()["data"]
+    assert list(data) == SPEC_KEYS and app.state.parts.engine.state is None
+    assert data["microphone"] == {"connected": True, "state": "blocked"}
+    assert data["models"] == {"llm": {"loaded": False, "warmed": False, "version": "v2.2"},
+                              "vad": {"loaded": False}, "stt": {"loaded": False},
+                              "tts": {"loaded": False, "cached_sentences": None}}
+    assert data["manual_db"]["loaded"] is True and data["battery"] is None
+    assert data["metronome"]["status"] == "off" and "want" not in data["rescue_signal"]
+    assert data["timer"] == {"object": 3, "status": "idle", "elapsed_s": 0, "started_at": None}
