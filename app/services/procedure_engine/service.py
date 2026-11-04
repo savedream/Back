@@ -1,6 +1,7 @@
 """절차 엔진 서비스 (계획 3-2·3-4): 엔진 태스크 하나가 입력을 하나씩 리듀스하고, 가장 이른 마감 시각에 깨어나 TickInput을 넣는다.
 
 리듀스 직후 한 곳에서 이벤트를 내고(turn.result → session.updated → 나머지) actions를 낭독 실행기로 넘긴다.
+화면용 timer.tick은 엔진 입력이 아니라 이 서비스의 주기 작업이 낸다(매초 상태가 바뀌지 않게, 계획 결정 C2).
 """
 import asyncio
 import logging
@@ -18,7 +19,7 @@ from app.services.procedure_engine.core import new_session, recover, reduce, res
 from app.services.procedure_engine.inputs import EngineInput, TickInput
 from app.services.procedure_engine.sequencer import Batch, Sequencer
 from app.services.procedure_engine.timers import deadlines
-from app.services.procedure_engine.view import session_changes
+from app.services.procedure_engine.view import session_changes, timer_view
 from app.services.records import RecordSink, Snapshot
 from app.services.tts import Speaker
 
@@ -47,6 +48,8 @@ class EngineService:
         self._pending = 0  # 넣었지만 아직 리듀스하지 않은 입력
         self._skipped: set[float] = set()  # 처리하지 못한 마감. 같은 마감으로 계속 깨어나지 않게 건너뛴다
         self._task: asyncio.Task | None = None
+        self._ticker: asyncio.Task | None = None  # timer.tick 주기 작업
+        self._timer_changed = asyncio.Event()  # 타이머 상태가 바뀌면 주기 작업을 깨운다
 
     async def start(self, previous_session_id: str | None = None, snapshot: Snapshot | None = None) -> None:
         """엔진 태스크를 띄운다. 준비가 끝난 뒤에 부른다. snapshot이 있으면 그 세션을 이어 가고(T_RESUME, 6-14),
@@ -67,11 +70,14 @@ class EngineService:
             self._apply(None, result, ctx, speak=True, resumed=True)
         self._task = asyncio.create_task(self._run())
         self._task.add_done_callback(_log_crash)
+        self._ticker = asyncio.create_task(self._tick_timer())
+        self._ticker.add_done_callback(_log_crash)
 
     async def stop(self) -> None:
-        if self._task is not None:
-            self._task.cancel()
-            await asyncio.gather(self._task, return_exceptions=True)
+        tasks = [t for t in (self._task, self._ticker) if t is not None]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         await self.sequencer.stop()
 
     @property
@@ -132,6 +138,28 @@ class EngineService:
                     self._step(inp, speak, future)
                 finally:
                     self._pending -= 1
+
+    async def _tick_timer(self) -> None:
+        """타이머가 도는 동안 경과 시간이 정수 초를 넘을 때마다 timer.tick(AC-E6). 늦게 깨어나도 밀린 tick을 몰아 내지 않고
+        한 번만 낸 뒤 다음 정수 초에 맞춘다. 돌지 않으면 타이머가 바뀔 때까지 잔다."""
+        while True:
+            self._timer_changed.clear()
+            timer = self.state.timer if self.state is not None else None
+            if timer is None or timer.status != "running":
+                await self._timer_changed.wait()
+                continue
+            target = timer.elapsed_s(self.clock.now()) + 1  # 다음 정수 초(이번 측정 구간 시작 시각 기준)
+            sleeper = asyncio.ensure_future(self.clock.sleep_until(timer.running_since + target - timer.accumulated_s))
+            changed = asyncio.ensure_future(self._timer_changed.wait())
+            try:
+                await asyncio.wait({sleeper, changed}, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                for waiter in (sleeper, changed):
+                    if not waiter.done():
+                        waiter.cancel()
+            now = self.clock.now()
+            if not changed.done() and self.state.timer.elapsed_s(now) >= target:
+                self._publish("timer.tick", None, timer_view(self.state.timer, now))
 
     def _step(self, inp: EngineInput, speak: bool, future: asyncio.Future | None) -> None:
         before, ctx = self.state, self._ctx()
@@ -210,6 +238,8 @@ class EngineService:
                 self._held.discard(obj)
 
     def _state_changed(self, before: SessionState | None) -> None:
+        if before is None or self.state.timer != before.timer:
+            self._timer_changed.set()
         if self._on_state is not None and self.state != before:
             try:
                 self._on_state(self.state)

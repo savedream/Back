@@ -368,3 +368,57 @@ async def test_tick_that_changes_nothing_is_not_repeated(kit, monkeypatch):
     monkeypatch.setattr(service_module, "reduce", stuck)
     assert await kit.advance(15) == []
     await until_idle(kit.engine, kit.engine.sequencer)
+
+
+def timer_button(typ: int) -> DeviceButtonInput:
+    return DeviceButtonInput(turn_id="t_timer", command=DeviceCommand(object=3, type=typ, source="button"))
+
+
+async def ticks(kit: ShellKit, seconds: float) -> list[dict]:
+    """시계를 넘기고 timer.tick 주기 작업이 돌 만큼 이벤트 루프를 돌린 뒤, 그사이 나온 timer.tick data."""
+    mark = len(kit.events)
+    kit.clock.advance(seconds)
+    for _ in range(50):
+        await asyncio.sleep(0)
+    await kit.settle()
+    return [e.data for e in kit.events[mark:] if e.type == "timer.tick"]
+
+
+async def running_timer(kit: ShellKit) -> str:
+    await kit.engine.submit(timer_button(1))
+    await kit.settle()  # 확인 문장이 끝나 시작(AC-E1)
+    assert kit.state.timer.status == "running"
+    return kit.state.timer.started_at
+
+
+async def test_timer_tick_every_second_while_running(kit):
+    """타이머가 도는 동안 1초마다 timer.tick. data는 화면용 TimerState(엔진 내부 칸 없음)."""
+    started_at = await running_timer(kit)
+    for n in (1, 2, 3):
+        assert await ticks(kit, 1) == [{"object": 3, "status": "running", "elapsed_s": n, "started_at": started_at}]
+
+
+async def test_late_wake_sends_one_tick(kit):
+    """늦게 깨어나도 밀린 tick을 몰아 내지 않는다(구독 큐가 차지 않게)."""
+    await running_timer(kit)
+    assert [d["elapsed_s"] for d in await ticks(kit, 10)] == [10]
+    assert [d["elapsed_s"] for d in await ticks(kit, 1)] == [11]
+
+
+@pytest.mark.parametrize("typ", [3, 4])
+async def test_no_tick_after_pause_or_reset(kit, typ):
+    await running_timer(kit)
+    assert [d["elapsed_s"] for d in await ticks(kit, 2)] == [2]
+    await kit.engine.submit(timer_button(typ))  # 일시정지 또는 초기화(버튼은 확인 창을 거친 것)
+    await kit.settle()
+    assert kit.state.timer.status == ("paused" if typ == 3 else "idle")
+    for _ in range(3):
+        assert await ticks(kit, 1) == []
+
+
+async def test_engine_stop_cancels_ticker():
+    kit = ShellKit()
+    await kit.start()
+    await running_timer(kit)
+    await kit.stop()
+    assert kit.engine._ticker.cancelled()
