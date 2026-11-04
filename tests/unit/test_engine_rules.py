@@ -50,6 +50,13 @@ def test_s2_last_known_location():
     assert ids(kit.say("여기 어디야"))[0] == ("template", "T_GPS_LAST")
 
 
+def test_s2_location_without_gps_module():
+    """GPS 모듈이 없으면(location None) 좌표 낭독을 건너뛰고 재시도도 걸지 않는다. 다시 시도해도 잡히지 않는다."""
+    kit = at_s1b(EngineKit(location=None))
+    assert ids(kit.say("여기 어디야")) == [("step", "EM03-04")]
+    assert kit.state.gps_retry is None
+
+
 def test_s3_cardiac_start(kit):
     assert ids(kit.say("사람이 쓰러졌는데 숨을 안 쉬어")) == [("intro", "EM-01"), ("step", "EM01-01")]
 
