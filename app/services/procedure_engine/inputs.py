@@ -18,6 +18,7 @@ class UserTurn(BaseModel):
     step_id: str | None
     text: str  # STT 원문(텍스트 턴이면 넣은 문장)
     normalized: str
+    trigger: Literal["text", "button", "vad"] = "text"  # 텍스트 턴(/api/utterances)·말하기 버튼·상시 듣기
 
 
 class FunctionCallInput(UserTurn):
