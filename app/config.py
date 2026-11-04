@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     boot_id_path: Path = Path("/proc/sys/kernel/random/boot_id")
     # 같은 부팅에서 백엔드만 다시 떴으면 상태 스냅샷에서 이어 간다(6-14). 끄면 늘 새 세션
     resume_from_snapshot: bool = True
+    # 정적 파일(/static). 매뉴얼 아이콘·그림(static/manuals/)은 UI가 제공한다
+    static_dir: Path = BACKEND_DIR / "static"
 
     # 버전 (GET /health). 매뉴얼 DB 버전은 적재한 DB의 meta.version에서 읽는다
     app_version: str = "1.3.0"
