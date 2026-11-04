@@ -14,10 +14,19 @@ class FakeDevices:
         self.commands: list[DeviceCommand] = []
         self.on: set[int] = set()  # 지금 울리는 소리 기능(2 메트로놈, 4 구조신호)
         self.unavailable: set[int] = set()  # 연결되지 않은 장치
+        self.held: set[int] = set()  # 음소거 관문을 닫은 소리 기능. on에 있어도 소리가 나지 않는다
+        self.holds: list[tuple[int, bool]] = []  # set_hold 호출 기록
         self._next: list[str] = []
 
     def fail_next(self, status: Literal["failed", "timeout"]) -> None:
         self._next.append(status)
+
+    def set_hold(self, obj: int, held: bool) -> None:
+        self.holds.append((obj, held))
+        if held:
+            self.held.add(obj)
+        else:
+            self.held.discard(obj)
 
     async def execute(self, command: DeviceCommand) -> DeviceOutcome:
         self.commands.append(command)
