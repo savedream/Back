@@ -205,7 +205,7 @@ def set_sound_device(run: Run, name: str, on: bool, source: str, step_id: str | 
         run.s.last_off_device = device.object
     action_id = run.device(device.object, 1 if on else 2, source, step_id)
     run.s.pending_devices[action_id] = {"object": device.object, "type": 1 if on else 2, "source": source,
-                                        "step_id": step_id}
+                                        "step_id": step_id, "turn_id": run.turn_id}
     if after_say is not None:
         run.s.pending_devices[action_id].update(after_say=after_say, prev=prev)
     run.event("device.state", device.model_dump())

@@ -203,6 +203,7 @@ def test_off_while_queued_cancels_the_on_request(kit):
     kit.say("구조 신호 켜 줘")
     [on] = [a for a in kit.device_actions if a.command.object == 4]
     assert on.action_id in kit.state.pending_devices
+    on_turn = kit.state.pending_devices[on.action_id]["turn_id"]
     mark = len(kit.records)
     assert ids(kit.say("구조 신호 꺼 줘")) == [("template", "T_DEV_SOS_OFF"), ("step", "EM03-04")]
     rescue = kit.state.devices["rescue_signal"]
@@ -212,6 +213,9 @@ def test_off_while_queued_cancels_the_on_request(kit):
     assert [(r.object, r.type, r.source, r.result) for r in kit.records[mark:] if r.kind == "device_result"] == [
         (4, 1, "voice", "cancelled")]
     assert [a.action_id for a in kit.device_actions if a.command.object == 4] == [on.action_id]  # 끄기 명령 없음
+    [cancelled] = [r for r in kit.records[mark:] if r.kind == "device_result"]
+    [off_said] = [r for r in kit.records[mark:] if r.kind == "user_utterance"]
+    assert cancelled.turn_id == on_turn != off_said.turn_id  # 끄기 턴이 아니라 원래 켜기 요청의 턴
 
 
 def test_volume_status_changed_only_when_volume_changes(kit):

@@ -69,8 +69,10 @@ def _cancel_queued(run: Run, device) -> bool:
     prev = command["prev"]
     device.want, device.status, device.queued = prev["want"], prev["status"], None
     run.s.last_off_device = prev["last_off_device"]
-    run.record(DeviceResultRecord(**run.record_base(), object=device.object, type=command["type"],
-                                  source=command["source"], result="cancelled", step_id=command["step_id"]))
+    # 취소 기록은 끄기가 아니라 원래 켜기 요청의 턴으로 남긴다(타이머 시작 취소와 같음)
+    base = {**run.record_base(), "turn_id": command.get("turn_id", run.turn_id)}
+    run.record(DeviceResultRecord(**base, object=device.object, type=command["type"], source=command["source"],
+                                  result="cancelled", step_id=command["step_id"]))
     run.event("device.state", device.model_dump())
     return True
 
