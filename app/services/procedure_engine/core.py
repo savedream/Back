@@ -49,6 +49,8 @@ def reduce(state: SessionState, inp: EngineInput, ctx: Ctx) -> EngineResult:
         timers.handle_tick(run)
     elif kind == "barge_in":
         _barge_in(run)
+    elif kind == "shutdown":
+        _shut_down(run)
     elif kind == "session_reset":
         return new_session(ctx, previous=state, turn_id=inp.turn_id)
     else:
@@ -91,6 +93,14 @@ def _barge_in(run: Run) -> None:
     """
     run.preempt()
     _back_to_unspoken(run)
+
+
+def _shut_down(run: Run) -> None:
+    """키트 끄기: 남은 안내를 끊고(replace, 아무것도 읽지 않음) 켜 둔 메트로놈·구조신호를 끈다. 위치·타이머·알림은 그대로
+    둔다(가짜 종료 훅이 동결을 풀면 이어 간다)."""
+    run.preempt()
+    for name in ("metronome", "rescue_signal"):
+        set_sound_device(run, name, on=False, source="engine")
 
 
 def _back_to_unspoken(run: Run) -> str | None:
