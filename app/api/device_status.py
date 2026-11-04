@@ -18,11 +18,11 @@ router = APIRouter()
 def get_devices(request: Request):
     """준비 전에도 200(엔진 시작 전이면 기본 상태, 마이크는 blocked). 배터리를 못 읽으면 battery: null이고 남은 사용 시간은
     주지 않는다. metronome·rescue_signal은 DeviceState에서 엔진 내부 칸(want)을 뺀 것."""
-    app = request.app.state
-    parts = app.parts
+    app_state = request.app.state
+    parts = app_state.parts
     engine = parts.engine
     state = engine_state(parts)
-    latest = app.device_status.latest
+    latest = app_state.device_status.latest
     if engine.state is None:
         mic = "blocked"  # 준비 전(GET /api/session과 같음)
     else:
@@ -37,7 +37,8 @@ def get_devices(request: Request):
         "rescue_signal": rescue.model_dump(exclude={"want"}),
         "timer": timer_view(state.timer, parts.clock.now()),
         "models": latest["models"],
-        "manual_db": {"loaded": app.readiness.is_ready(Component.MANUAL_DB), "version": app.manual_db.version},
+        "manual_db": {"loaded": app_state.readiness.is_ready(Component.MANUAL_DB),
+                      "version": app_state.manual_db.version},
         "battery": latest["battery"],
         "storage": {"unsaved_records": len(parts.records.unsaved()), **latest["storage"]},
         "clock": latest["clock"],
