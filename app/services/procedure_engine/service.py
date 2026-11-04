@@ -7,6 +7,7 @@
 import asyncio
 import logging
 from collections.abc import Callable
+from typing import Literal
 
 from app.schemas.device import Location
 from app.schemas.session import SessionState
@@ -44,6 +45,8 @@ class EngineService:
         self._session_ids = session_ids  # 이미 쓴 세션 ID(세션 표)
         self._on_state = on_state  # 상태가 바뀌면 부른다. 상태 스냅샷(6-14)을 저장하는 데 쓴다
         self.state: SessionState | None = None
+        # 기록에 남기는 시계 출처(Record.clock). GPS·RTC로 시각을 맞추는 일은 키트 단계라 지금은 늘 unsynced
+        self.clock_source: Literal["gps", "rtc", "unsynced"] = "unsynced"
         self._devices = devices
         self._held: set[int] = set()  # 음소거 관문을 닫아 둔 소리 기능(object)
         self.sequencer = Sequencer(db, events, speaker, devices, records, self.submit, lambda: self.state, clock,
@@ -132,7 +135,7 @@ class EngineService:
 
     def _ctx(self) -> Ctx:
         return Ctx(db=self.db, now=self.clock.now(), wall=self.clock.wall(), location=self._location(),
-                   session_ids=self._session_ids())
+                   clock_source=self.clock_source, session_ids=self._session_ids())
 
     def _deadline(self) -> float | None:
         if self.state is None or self.frozen:
