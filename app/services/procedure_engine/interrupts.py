@@ -190,7 +190,7 @@ def cancel_timer_start(run: Run) -> None:
     """확인 문장 뒤로 미룬 타이머 시작·재개를 취소한다(그 전에 일시정지·초기화가 옴). 그 요청은 cancelled로 남긴다."""
     pending, run.s.timer.starts_after = run.s.timer.starts_after, None
     run.record(DeviceResultRecord(**{**run.record_base(), "turn_id": pending.turn_id}, object=3, type=1,
-                                  source=pending.source, result="cancelled", step_id=pending.step_id))
+                                  source=pending.source, result="cancelled"))
 
 
 # 타이머 초기화: 현재 측정 구간을 기록에 저장한 뒤 초기화(저장 결과는 RecordSaved로 돌아온다)

@@ -74,9 +74,9 @@ async def shutdown(request: Request, background: BackgroundTasks, body: Shutdown
     except BaseException:
         engine.unfreeze()
         raise
-    records = await parts.records.session_records(engine.state.session_id) if engine.state is not None else None
+    records = await parts.records.session_records(engine.state.session_id) if engine.state is not None else []
     background.add_task(parts.shutdown.shutdown)
-    return ok(ShutdownOut(saved_records=sum(r.saved for r in records or []), shutting_down=True))
+    return ok(ShutdownOut(saved_records=sum(r.saved for r in records), shutting_down=True))
 
 
 async def _settle_turn(state, limit_s: float) -> None:

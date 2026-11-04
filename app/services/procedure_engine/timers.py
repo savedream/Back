@@ -124,7 +124,7 @@ def start_after_confirm(run: Run) -> None:
         timer.started_at = run.ctx.iso()
     timer.status, timer.running_since = "running", run.ctx.now
     run.record(DeviceResultRecord(**{**run.record_base(), "turn_id": pending.turn_id}, object=3, type=1,
-                                  source=pending.source, result="success", step_id=pending.step_id))
+                                  source=pending.source, result="success"))
 
 
 def end_announcing(run: Run) -> None:
