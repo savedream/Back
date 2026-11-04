@@ -29,24 +29,22 @@ ButtonResult = Literal["pending", "queued", "already"]
 class Pressed:
     turn_id: str
     result: EngineResult
-    reading: bool  # 누를 때 읽던(읽을) 안내 문장이 있었는지
 
 
 async def _press(request: Request, obj: int, typ: int) -> Pressed:
     """버튼 하나 = 턴 하나. 턴 잠금은 쓰지 않고(명세 오류 목록에 AUDIO_BUSY가 없음) 턴 번호만 받는다."""
     state = request.app.state
-    engine = state.parts.engine
-    reading = engine.sequencer.reading  # 읽던 문장이 있으면 확인 문장은 그 뒤에 읽고, 실행도 그 뒤가 된다
     turn_id = state.turn_lock.next_id()
     command = DeviceCommand(object=obj, type=typ, source="button")
-    result = await engine.submit(DeviceButtonInput(turn_id=turn_id, command=command))
-    return Pressed(turn_id=turn_id, result=result, reading=reading)
+    result = await state.parts.engine.submit(DeviceButtonInput(turn_id=turn_id, command=command))
+    return Pressed(turn_id=turn_id, result=result)
 
 
 def _button_result(pressed: Pressed, already: bool) -> ButtonResult:
     if already:
         return "already"
-    return "queued" if pressed.reading else "pending"
+    # 엔진이 정한 값: 읽던(읽을) 안내 문장이 있으면 확인 문장은 그 뒤에 읽고, 실행도 그 뒤가 된다
+    return "queued" if pressed.result.queued else "pending"
 
 
 def _commanded(result: EngineResult, obj: int) -> bool:

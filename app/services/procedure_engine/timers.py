@@ -95,7 +95,20 @@ def handle_playback(run: Run, action_id: str, event: str, result: str | None) ->
     prompt = run.s.pending_prompt
     if prompt is not None and prompt.waits_for_action == action_id:
         prompt.waits_for_action = None  # 확인 질문을 다 읽음. 15초는 sync_timers가 건다
+    confirm_finished(run, action_id)
     end_announcing(run)
+
+
+def confirm_finished(run: Run, action_id: str) -> None:
+    """기기 확인 문장의 낭독이 끝남(끊겨도 같음): 그 문장 뒤로 미룬 켜기의 queued를 푼다. 시퀀서는 바로 다음에 그 명령을
+    실행한다."""
+    for command in run.s.pending_devices.values():
+        if command.get("after_say") != action_id:
+            continue
+        device = next(d for d in run.s.devices.values() if d.object == command["object"])
+        if device.queued is not None:
+            device.queued = None
+            run.event("device.state", device.model_dump())
 
 
 def end_announcing(run: Run) -> None:

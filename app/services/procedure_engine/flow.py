@@ -189,8 +189,12 @@ def _timer_start_by_step(run: Run, step: dict) -> None:
 
 
 def set_sound_device(run: Run, name: str, on: bool, source: str, step_id: str | None = None,
-                     force: bool = False) -> bool:
-    """메트로놈(2)·구조신호(4) 켜기·끄기. 이미 같은 상태를 요청했으면(force가 아니면) 명령을 내지 않고 False."""
+                     force: bool = False, after_say: str | None = None, prev: dict | None = None) -> bool:
+    """메트로놈(2)·구조신호(4) 켜기·끄기. 이미 같은 상태를 요청했으면(force가 아니면) 명령을 내지 않고 False.
+
+    after_say·prev(음성·버튼 켜기): 그 확인 문장과 요청 전 want·status·last_off_device. 응답 대기 항목에 함께 두고
+    확인 문장이 끝나면 queued를 풀고, 그 전에 끄기가 오면 prev로 되돌린다.
+    """
     device = run.s.devices[name]
     want = "on" if on else "off"
     if device.want == want and not force:
@@ -202,6 +206,8 @@ def set_sound_device(run: Run, name: str, on: bool, source: str, step_id: str | 
     action_id = run.device(device.object, 1 if on else 2, source, step_id)
     run.s.pending_devices[action_id] = {"object": device.object, "type": 1 if on else 2, "source": source,
                                         "step_id": step_id}
+    if after_say is not None:
+        run.s.pending_devices[action_id].update(after_say=after_say, prev=prev)
     run.event("device.state", device.model_dump())
     return True
 

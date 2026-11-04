@@ -43,9 +43,33 @@ def _sound(run: Run, obj: int, on: bool, source: str) -> None:
     if device.want == ("on" if on else "off") and device.status != "unknown":
         run.say_template("T_DEV_ALREADY_ON" if on else "T_DEV_ALREADY_OFF")  # 켜진 기능에 켜 줘라고 해도 끄지 않음
         return
-    run.say_template(on_template if on else off_template)
-    # 응답 실패로 확인이 안 되는(unknown) 기능은 같은 요청이어도 다시 명령한다
-    set_sound_device(run, name, on=on, source=source, force=True)
+    if not on and device.queued is not None and _cancel_queued(run, device):
+        run.say_template(off_template)
+        return
+    say_action = run.say_template(on_template if on else off_template)
+    if not on:
+        # 응답 실패로 확인이 안 되는(unknown) 기능은 같은 요청이어도 다시 명령한다
+        set_sound_device(run, name, on=False, source=source, force=True)
+        return
+    prev = {"want": device.want, "status": device.status, "last_off_device": run.s.last_off_device}
+    set_sound_device(run, name, on=True, source=source, force=True, after_say=say_action, prev=prev)
+    run.on_requests.append((name, source))
+
+
+def _cancel_queued(run: Run, device) -> bool:
+    """읽던 안내 뒤로 미룬 켜기에 끄기가 오면 대기를 취소한다(6-10): 응답 대기에서 빼고(시퀀서가 그 켜기 명령을 건너뜀)
+    요청 전 값으로 되돌린다. 끄기 명령은 내지 않는다. 이미 큐에 있는 켜기 확인 문장은 그대로 읽힌다. 취소했으면 True."""
+    queued = [a for a, c in run.s.pending_devices.items() if c["object"] == device.object and "after_say" in c]
+    if not queued:
+        return False
+    command = run.s.pending_devices.pop(queued[-1])
+    prev = command["prev"]
+    device.want, device.status, device.queued = prev["want"], prev["status"], None
+    run.s.last_off_device = prev["last_off_device"]
+    run.record(DeviceResultRecord(**run.record_base(), object=device.object, type=command["type"],
+                                  source=command["source"], result="cancelled", step_id=command["step_id"]))
+    run.event("device.state", device.model_dump())
+    return True
 
 
 def _no_target(run: Run, on: bool, source: str) -> bool:

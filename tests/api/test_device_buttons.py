@@ -90,14 +90,34 @@ async def test_rescue_signal_queued_while_reading(kit):
     speaker = await reading_guidance(kit)
     data = await press(kit, "/api/rescue-signal/on")
     assert data["result"] == "queued"
+    assert data["device"]["queued"] == {"type": 1, "source": "button"}  # 6-10 queued(AC-E3)
     assert kit.parts.devices.on == set()  # 아직 켜지 않았다
     speaker.release()
     await kit.settle()
-    assert kit.parts.devices.on == {4}
+    assert kit.parts.devices.on == {4} and kit.state.devices["rescue_signal"].queued is None
     said = [u.template_id or u.step_id for u in speaker.spoken]
     question = kit.state.step_id
     assert said.index("T_DEV_SOS_ON") > said.index(question)  # 읽던 질문 뒤에 확인 문장
     assert said[-2:] == ["T_DEV_SOS_ON", question]  # 동작 뒤 질문 다시(6-10)
+
+
+async def test_rescue_signal_off_cancels_queued_on(kit):
+    """대기 중인 켜기에 끄기를 누르면 대기를 취소한다(6-10). 장치는 켜기·끄기 명령을 받지 않고, 확인 문장은 둘 다 읽는다."""
+    speaker = await reading_guidance(kit)
+    before, last_off = kit.state.devices["rescue_signal"].model_copy(), kit.state.last_off_device
+    await press(kit, "/api/rescue-signal/on")
+    data = await press(kit, "/api/rescue-signal/off")
+    assert data["device"]["queued"] is None and data["device"]["status"] == before.status
+    rescue = kit.state.devices["rescue_signal"]
+    assert [c for c in kit.state.pending_devices.values() if c["object"] == 4] == []
+    assert (rescue.want, rescue.status, kit.state.last_off_device) == (before.want, before.status, last_off)
+    speaker.release()
+    await kit.settle()
+    assert [c for c in kit.parts.devices.commands if c.object == 4] == [] and kit.parts.devices.on == set()
+    cancelled = [(r.object, r.type, r.source) for r in kit.records if r.kind == "device_result" and r.result == "cancelled"]
+    assert cancelled == [(4, 1, "button")]
+    said = [u.template_id for u in speaker.spoken]
+    assert said.index("T_DEV_SOS_ON") < said.index("T_DEV_SOS_OFF")  # 이미 큐에 있던 켜기 확인 문장도 읽는다(기본값 2)
 
 
 async def until_commanded(kit: Kit, obj: int, typ: int) -> None:

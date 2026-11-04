@@ -1,13 +1,15 @@
-"""기기 규칙 후속 (명세서 ⑦ 소리 충돌, 내부 모듈 계약 6-10, 계획 PR①): 안내·녹음 중 소리 기능 잠시 멈춤(held_by, 결정 A3).
+"""기기 규칙 후속 (명세서 ⑦ 소리 충돌, 내부 모듈 계약 6-10, 계획 PR①): 안내·녹음 중 소리 기능 잠시 멈춤(held_by, 결정 A3),
+읽던 안내 뒤로 미룬 켜기(queued)와 대기 중 끄기 취소(결정 B1).
 
 리듀서는 낭독 시작·끝 되먹임(started·finished)과 녹음 사실(capturing)로 held_by를 정한다. 장치 음소거 관문은
 셸 시험(test_engine_service.py, tests/api/test_device_buttons.py)에서 본다.
 """
 import pytest
 
+from app.schemas.device import DeviceCommand
 from app.schemas.session import SessionState
 from app.services.procedure_engine.core import new_session, recover, resume_session
-from app.services.procedure_engine.inputs import PlaybackInput
+from app.services.procedure_engine.inputs import DeviceButtonInput, PlaybackInput
 from app.services.procedure_engine.timers import hold_reason
 from tests.unit.engine_kit import EngineKit, ids
 
@@ -17,7 +19,12 @@ def kit() -> EngineKit:
     k = EngineKit()
     k.model.add("구조 신호 켜 줘", "<maum_4>(object=4, type=1)<maum_end>")
     k.model.add("메트로놈 켜 줘", "<maum_4>(object=2, type=1)<maum_end>")
+    k.model.add("구조 신호 꺼 줘", "<maum_4>(object=4, type=2)<maum_end>")
     return k
+
+
+def button(obj: int, typ: int) -> DeviceButtonInput:
+    return DeviceButtonInput(turn_id="t_btn", command=DeviceCommand(object=obj, type=typ, source="button"))
 
 
 def at_s1b(kit: EngineKit) -> EngineKit:
@@ -142,3 +149,65 @@ def test_new_session_and_resume_drop_queued_and_hold(kit):
     assert not resumed.capturing and not resumed.announcing
     assert resumed.devices["rescue_signal"].want == "on"  # 켜져 있던 구조신호는 다시 켠다
     assert (resumed.devices["rescue_signal"].queued, resumed.devices["rescue_signal"].held_by) == (None, None)
+
+
+@pytest.mark.parametrize("name, source", [("rescue_signal", "voice"), ("metronome", "button")])
+def test_sound_on_while_reading_is_queued_until_its_confirm_ends(kit, name, source):
+    """안내를 읽는 중에 켜기 요청이 오면 queued {type, source}. 그 확인 문장 낭독이 끝나면(장치 명령 직전) None."""
+    at_s1b(kit)
+    kit.hold()
+    kit.device_status = None  # 시퀀서처럼 확인 문장이 끝나기 전에는 장치 응답이 오지 않게
+    kit.say("다시 말해 줘")  # EM03-04를 읽는 중
+    obj = kit.state.devices[name].object
+    if source == "voice":
+        kit.say("구조 신호 켜 줘")
+    else:
+        kit.feed(button(obj, 1))
+    assert kit.state.devices[name].queued == {"type": 1, "source": source}
+    kit.finish()  # 읽던 질문
+    assert kit.state.devices[name].queued is not None
+    mark = len(kit.events)
+    kit.finish()  # 켜기 확인 문장
+    assert kit.state.devices[name].queued is None
+    assert [e.data["queued"] for e in kit.events[mark:] if e.type == "device.state" and e.data["name"] == name] == [None]
+
+
+def test_replace_does_not_queue_on_dropped_guidance(kit):
+    """확인 질문을 취소해 위치가 바뀌면(replace) 읽던 확인 질문은 버려지므로 그것을 근거로 queued를 채우지 않는다."""
+    at_s5b(kit)
+    kit.hold()
+    kit.say("타이머 초기화해 줘")  # T_TIMER_RESET_ASK를 읽는 중
+    res = kit.feed(button(4, 1))
+    assert res.mode == "replace" and not res.queued
+    assert kit.state.devices["rescue_signal"].queued is None
+
+
+@pytest.mark.parametrize("obj, typ", [(3, 1), (5, 1), (4, 2), (2, 1)])
+def test_result_queued_for_any_request_while_reading(kit, obj, typ):
+    """EngineResult.queued는 요청 종류(타이머·음량·끄기 포함)와 상관없이 읽던 안내가 남았는지로 정한다."""
+    at_s1b(kit)
+    assert not kit.feed(button(obj, typ)).queued
+    kit.hold()
+    kit.say("다시 말해 줘")
+    assert kit.feed(button(obj, typ)).queued
+
+
+def test_off_while_queued_cancels_the_on_request(kit):
+    """대기 중인 켜기에 끄기가 오면 응답 대기에서 빼고 요청 전 값으로 되돌린다. 기록은 cancelled, 끄기 명령은 없다."""
+    at_s1b(kit)
+    kit.hold()
+    kit.device_status = None
+    kit.say("다시 말해 줘")
+    before, last_off = kit.state.devices["rescue_signal"].model_copy(), kit.state.last_off_device
+    kit.say("구조 신호 켜 줘")
+    [on] = [a for a in kit.device_actions if a.command.object == 4]
+    assert on.action_id in kit.state.pending_devices
+    mark = len(kit.records)
+    assert ids(kit.say("구조 신호 꺼 줘")) == [("template", "T_DEV_SOS_OFF"), ("step", "EM03-04")]
+    rescue = kit.state.devices["rescue_signal"]
+    assert on.action_id not in kit.state.pending_devices
+    assert (rescue.want, rescue.status, rescue.queued) == (before.want, before.status, None)
+    assert kit.state.last_off_device == last_off
+    assert [(r.object, r.type, r.source, r.result) for r in kit.records[mark:] if r.kind == "device_result"] == [
+        (4, 1, "voice", "cancelled")]
+    assert [a.action_id for a in kit.device_actions if a.command.object == 4] == [on.action_id]  # 끄기 명령 없음

@@ -73,6 +73,7 @@ def recover(state: SessionState, inp: EngineInput, ctx: Ctx) -> EngineResult:
             pending.started = False
     elif inp.kind == "playback":
         run.s.pending_says.pop(inp.action_id, None)
+        timers.confirm_finished(run, inp.action_id)
     if inp.kind in ("function_call", "model_error", "progress_phrase", "speech_activity"):
         run.s.speech_active = False
     timers.end_announcing(run)
