@@ -11,6 +11,7 @@ def test_defaults():
     s = Settings(_env_file=None)
     assert s.host == "127.0.0.1"
     assert s.port == 8000
+    assert s.shutdown_timeout_s == 3
     assert s.vad_silence_s == 0.8
     assert s.max_utterance_s == 15
     assert s.model_timeout_s == 5
@@ -19,7 +20,7 @@ def test_defaults():
     assert s.prompt_prefix_im_start is False
     assert s.manual_db_path.name == "manual_db.json"
     assert s.manual_db_path.exists()
-    assert all([s.fake_model, s.fake_devices, s.fake_audio, s.fake_gps])
+    assert all([s.fake_model, s.fake_devices, s.fake_audio, s.fake_gps, s.fake_auto_ready])
     assert s.enable_docs is False
 
 

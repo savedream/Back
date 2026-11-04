@@ -1,0 +1,317 @@
+"""사용자 턴 처리 (명세서 6-4): 모델 출력별, 해석·인식 실패, 대기 단계 진행 표현. 입력 하나에 단계 이동은 한 번만."""
+from app.schemas.function_call import FunctionCall, Observation
+from app.schemas.record import UserReportRecord, UserUtteranceRecord
+from app.schemas.session import ObservedValue, SessionState
+from app.services.manual_db import ManualDB
+from app.services.procedure_engine import engine_constants as C
+from app.services.procedure_engine.context import Run
+from app.services.procedure_engine.devices_rules import request_device
+from app.services.procedure_engine.flow import (
+    announce_gps, ask, ask_again, cancel_alerts, current_step, goto, leave_compression, log_answer, manual_of,
+    new_routing, route, routing_target_manual, slot_branch, store_observation,
+)
+from app.services.procedure_engine.inputs import FunctionCallInput, ModelErrorInput, ProgressPhraseInput
+from app.services.procedure_engine.interrupts import (
+    answer_prompt, clear_prompt, reask, reask_prompt, switch, try_i1, try_i2,
+)
+
+
+def _record_user(run: Run, inp, fc: FunctionCall | None, corrects: str | None = None, note: str | None = None) -> None:
+    rec = UserUtteranceRecord(**run.record_base(), text=inp.text, normalized=inp.normalized, function_call=fc,
+                              corrects=corrects, note=note)
+    run.user_record_id = rec.record_id
+    run.record(rec)
+
+
+def handle_function_call(run: Run, inp: FunctionCallInput) -> None:
+    fc = inp.function_call
+    func = fc.func
+    corrects = None
+    if func == 2:
+        key = next(k for k, v in fc.observation.model_dump().items() if v != -1)
+        old = run.s.observation[key]
+        corrects = old.record_id if old else None
+    note = "구급대 도착" if func == 5 and fc.args["type"] == 4 else None
+    _record_user(run, inp, fc, corrects, note)
+    run.event("turn.result", {"function_call": fc.model_dump(), "error_code": None})
+    run.s.speech_active = False
+
+    if func == 3:
+        repeat_request(run, fc.args["scope"], fc.args["speed"])
+        return
+    prompt = run.s.pending_prompt
+    if prompt is not None and prompt.type == "switch_confirm" and func != 1:
+        _during_switch_confirm(run, fc)
+        return
+    if prompt is not None and prompt.type == "timer_reset" and func != 1:
+        clear_prompt(run)  # 그 확인 질문의 답이 아닌 입력이면 취소하고 그 입력을 처리한다
+    if prompt is not None and prompt.type in ("which_on", "which_off") and func != 4:
+        clear_prompt(run)
+
+    if func == 0:
+        _report_situation(run, inp, fc)
+    elif func == 1:
+        _answer_check(run, inp, fc)
+    elif func == 2:
+        _correct(run, fc)
+    elif func == 3:
+        repeat(run, fc.args["scope"], fc.args["speed"])
+    elif func == 4:
+        request_device(run, fc.args["object"], fc.args["type"], "voice")
+    elif func == 5:
+        _out_of_scope(run, fc.args["type"])
+
+
+def _during_switch_confirm(run: Run, fc: FunctionCall) -> None:
+    """확인 질문(switch_confirm) 중 확인 응답이 아닌 입력(v1.7): I1·I2는 그대로, 상황 설명·정정은 관찰값만 저장,
+    그 밖의 함수는 각 규칙대로 처리한 뒤 확인 질문을 다시 묻고 15초를 다시 잰다."""
+    if fc.observation is not None:
+        store_observation(run, fc.observation, "situation" if fc.func == 0 else "correction")
+        if try_i1(run, None, fc.observation) or try_i2(run, fc.observation):
+            return
+    if fc.func == 4:
+        # 확인 질문을 다시 묻거나, 기능에 확인이 필요하면 그 확인 질문이 전환 확인을 대신한다
+        request_device(run, fc.args["object"], fc.args["type"], "voice")
+        return
+    elif fc.func == 5:
+        _out_of_scope(run, fc.args["type"], reask=False)
+    if run.s.pending_prompt is not None:
+        reask_prompt(run)
+
+
+def _situation_branch(run: Run, inp: FunctionCallInput, fc: FunctionCall) -> str | None:
+    """상황 설명 5번: 지금 질문의 slot 값이 함께 왔으면 그 값으로 갈 분기. 질문이 바뀌었으면 쓰지 않는다(6-1)."""
+    step = current_step(run)
+    if step is None or step["kind"] != "ask" or not step["slot"]:
+        return None
+    if inp.epoch != run.start_epoch or inp.step_id != run.s.step_id:
+        return None
+    value = getattr(fc.observation, step["slot_key"])
+    return slot_branch(step, [value]) if value != -1 else None
+
+
+def _report_situation(run: Run, inp: FunctionCallInput, fc: FunctionCall) -> None:
+    store_observation(run, fc.observation, "situation")
+    situation = fc.args["situation"]
+    active = run.s.active_manual_id
+    switching = bool(active) and situation != -1 and run.db.manual_by_situation[situation]["manual_id"] != active
+    step = current_step(run)
+    branch = None if switching else _situation_branch(run, inp, fc)
+    if try_i1(run, step[branch] if branch else None, fc.observation) or try_i2(run, fc.observation):
+        return
+    if switching:
+        switch(run, situation, fc)
+        return
+    if branch:
+        log_answer(run, step, [getattr(fc.observation, step["slot_key"])], "answer", branch)
+        goto(run, step[branch])
+        return
+    if run.s.mode == "idle":
+        new_routing(run, routing_target_manual(run, situation))
+        route(run, situation)
+        return
+    o = fc.observation
+    if step is not None and step["step_id"] == C.OBSERVE_WAIT_STEP and (o.conscious != -1 or o.breathing != -1):
+        goto(run, C.OBSERVE_RECHECK_STEP)
+    elif step is not None and step["kind"] == "ask":
+        ask_again(run)
+    else:
+        run.say_template("T_NOTED")
+
+
+def _answer_branch(step: dict, fc: FunctionCall) -> tuple[str, list[int] | None, bool]:
+    """ask 단계에서 이 확인 응답이 갈 분기, 분기 근거 값 묶음, 사용자가 그 slot 값을 직접 말했는지."""
+    said = getattr(fc.observation, step["slot_key"]) if step["slot"] else -1
+    branch = slot_branch(step, [said]) if said != -1 else None
+    if branch:
+        return branch, [said], True
+    answer = fc.args["answer"]
+    if answer == 3:
+        return "on_unknown", None, said != -1
+    branch = "on_yes" if answer == 1 else "on_no"
+    allowed = (step["slot_yes"] if answer == 1 else step["slot_no"]) if step["slot"] else None
+    # 직접 말한 값이 질문 목록 밖이면(숨쉬기 곤란 질문에 "네, 숨을 거의 안 쉬어요") 분기는 네·아니요대로,
+    # 기억하는 값은 직접 말한 값 그대로 둔다(2026-10-29 팀 결정)
+    return branch, allowed, said != -1
+
+
+def _answer_check(run: Run, inp: FunctionCallInput, fc: FunctionCall) -> None:
+    store_observation(run, fc.observation, "answer")
+    step = current_step(run)
+    target = None
+    if step is not None and step["kind"] == "ask" and run.s.pending_prompt is None:
+        target = step[_answer_branch(step, fc)[0]]
+    if try_i1(run, target, fc.observation) or try_i2(run, fc.observation):
+        return
+    if run.s.pending_prompt is not None:
+        answer_prompt(run, fc.args["answer"])
+        return
+    if step is None:
+        return  # 안내 전 확인 응답은 기록만
+    if inp.epoch != run.start_epoch or inp.step_id != run.s.step_id:
+        ask_again(run)  # 도착했을 때 질문이 바뀌어 있었으면 그 답을 쓰지 않고 현재 질문을 다시 묻는다
+        return
+    if step["kind"] == "ask":
+        branch, allowed, said = _answer_branch(step, fc)
+        if branch == "on_unknown":
+            run.say_template("T_UNKNOWN")
+        elif allowed is not None:
+            if not said:
+                run.s.observation[step["slot_key"]] = ObservedValue(
+                    allowed=list(allowed), source="answer", step_id=step["step_id"], record_id=run.user_record_id,
+                    routing_no=run.s.routing_no, at=run.ctx.iso())
+            log_answer(run, step, list(allowed), "answer", branch)
+        if step["report_on_yes"] and branch == "on_yes":
+            _user_report(run, inp, step["report_on_yes"], step["step_id"], "report_on_yes")
+        run.s.no_speech.count = 0
+        goto(run, step[branch])
+    elif step["kind"] == "wait":
+        nxt = step["next"]
+        if nxt and run.db.steps_by_id[nxt]["kind"] == "ask":
+            goto(run, nxt)
+        else:
+            _user_report(run, inp, inp.normalized, step["step_id"], "wait_answer")  # 말없이 기록
+    else:
+        run.say_template("T_NO_ASK")
+        goto(run, step["step_id"])
+
+
+def _user_report(run: Run, inp, report: str, step_id: str, basis: str) -> None:
+    run.record(UserReportRecord(**run.record_base(), text=inp.text, report=report, step_id=step_id, basis=basis,
+                                from_record=run.user_record_id))
+
+
+def _correction(run: Run, observation: Observation) -> tuple[int, dict, int, str] | None:
+    """정정한 값으로 분기했던 가장 최근 질문과 새 분기. 그런 질문이 없거나 분기가 같으면 None.
+
+    관찰값이 여럿이면 모두 저장하되, 그중 가장 최근에 분기한 질문 하나만 다시 분기한다(입력 하나에 단계 이동은 한 번).
+    """
+    said = {k: v for k, v in observation.model_dump().items() if v != -1}
+    for index in range(len(run.s.answer_log) - 1, -1, -1):
+        entry = run.s.answer_log[index]
+        if entry.slot_key in said:
+            value = said[entry.slot_key]
+            step = run.db.steps_by_id[entry.step_id]
+            branch = slot_branch(step, [value])
+            return (index, step, value, branch) if branch and branch != entry.branch else None
+    return None
+
+
+def _correct(run: Run, fc: FunctionCall) -> None:
+    store_observation(run, fc.observation, "correction")
+    found = _correction(run, fc.observation)
+    if try_i1(run, found[1][found[3]] if found else None, fc.observation):
+        return
+    if found is None:
+        run.say_template("T_CORRECT_KEEP")  # 그런 질문이 아직 없거나 분기가 같으면 값만 바꾼다
+        ask_again(run)
+        return
+    index, step, value, branch = found
+    run.say_template("T_CORRECT")
+    cancel_alerts(run, lambda a: a.log_index > index)  # 되돌린 지점 이후에 건 알림
+    target = step[branch]
+    if manual_of(run, target) not in (C.CARDIAC_MANUAL, C.AED_MANUAL):
+        leave_compression(run)
+    run.s.answer_log = run.s.answer_log[: index + 1]
+    log_answer(run, step, [value], "answer", branch)
+    run.preempt()
+    goto(run, target)
+
+
+def repeat_request(run: Run, scope: int, speed: int) -> None:
+    """반복 요청(음성 func 3, 다시 듣기 버튼). 확인 질문이 걸려 있으면 취소하지 않고 그 질문을 다시 읽고 기다린다
+    (2026-10-29 팀 결정: 다시 들은 뒤의 '네'가 원래 질문의 답이 되지 않게)."""
+    if run.s.pending_prompt is not None:
+        reask_prompt(run, speed)
+    else:
+        repeat(run, scope, speed)
+
+
+def repeat(run: Run, scope: int, speed: int) -> None:
+    """반복 요청(다시 듣기 버튼은 scope 2). 단계·상태·타이머·알림은 바꾸지 않는다."""
+    if scope == 3:
+        run.say_template("T_REPEAT_ASK", speed=speed)
+        return
+    if scope == 1:
+        last = run.s.last_utterance
+        if last is None:
+            return
+        run.say_utterance(last.model_copy(update={"utterance_id": run.next_id("utterance", "u"), "speed": speed}))
+        return
+    step = current_step(run)
+    if step is not None and step["kind"] == "ask":
+        ask(run, step, speed)
+    elif step is not None and step["kind"] != "wait":
+        return  # 말하기 버튼으로 되돌아온 say 단계: 입력 처리 뒤 그 단계부터 이어 간다
+    elif run.s.spoken_step_id:
+        spoken = run.db.steps_by_id[run.s.spoken_step_id]  # wait처럼 문장이 없으면 마지막으로 읽은 단계
+        run.say_step(spoken, "instruction", speed)
+
+
+def _out_of_scope(run: Run, typ: int, reask: bool = True) -> None:
+    if typ == 1:
+        if run.s.mode == "idle":
+            run.notice("OUT_OF_SCOPE", "T_OOS_1", run.template_text("T_OOS_1"))  # 안내 전에는 말하지 않음
+            return
+        run.say_template("T_OOS_1")
+    elif typ == 2:
+        run.say_template("T_OOS_2")
+        announce_gps(run)
+    elif typ == 3:
+        run.say_template("T_OOS_3")  # 매뉴얼 밖 내용은 답하지 않는다
+        if reask:
+            repeat(run, 2, 0)
+        return
+    if reask:
+        ask_again(run)
+
+
+def handle_model_error(run: Run, inp: ModelErrorInput) -> None:
+    run.s.speech_active = False
+    run.event("turn.result", {"function_call": None, "error_code": inp.error_code.value})
+    if inp.error_code.value.startswith("STT_"):
+        run.notice(inp.error_code.value)  # 잡음마다 말하지 않게 화면에만. 무응답 횟수에 넣지 않음
+        return
+    _record_user(run, inp, None)
+    run.say_template("T_RETRY")
+    if run.s.pending_prompt is not None:
+        reask_prompt(run)
+    else:
+        ask_again(run)
+
+
+def is_progress_phrase(db: ManualDB, state: SessionState, normalized: str) -> bool:
+    """대기 단계에서 정규화한 문장 전체가 진행 표현 목록과 같은지(6-8). 같으면 턴 경로가 모델을 건너뛴다."""
+    step = db.steps_by_id.get(state.step_id) if state.step_id else None
+    return step is not None and step["kind"] == "wait" and normalized in C.PROGRESS_PHRASES
+
+
+def handle_progress_phrase(run: Run, inp: ProgressPhraseInput) -> None:
+    run.s.speech_active = False
+    _record_user(run, inp, None)
+    run.event("turn.result", {"function_call": None, "error_code": None})
+    prompt = run.s.pending_prompt
+    if prompt is not None and prompt.type != "switch_confirm":
+        clear_prompt(run)  # 그 확인 질문의 답이 아닌 입력이면 취소하고 이 입력을 처리한다(6-7)
+    step = current_step(run)
+    if step is None or step["kind"] != "wait":
+        reask(run)
+    elif step["next"]:
+        clear_prompt(run)  # 위치가 바뀌면 걸려 있던 확인 질문은 취소한다
+        run.s.wait_deadline = None
+        goto(run, step["next"])
+    else:
+        run.say_template("T_WAITING")  # 압박 2분·관찰 3분·조난 30분은 건너뛰지 않음
+        if run.s.pending_prompt is not None:
+            reask_prompt(run)
+
+
+def handle_location_button(run: Run) -> None:
+    """메인 화면의 119 신고 버튼: 기타 type 2와 같은 처리. 확인 질문도 음성 입력과 같은 규칙(6-7)."""
+    prompt = run.s.pending_prompt
+    if prompt is not None and prompt.type == "switch_confirm":
+        _out_of_scope(run, 2, reask=False)
+        reask_prompt(run)
+        return
+    clear_prompt(run)
+    _out_of_scope(run, 2)

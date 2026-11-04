@@ -121,7 +121,7 @@ def test_server_does_not_start_with_broken_db(tmp_path, db):
 
 def test_startup_loads_db_and_marks_manual_db_ready(real_db):
     """시작 때 매뉴얼 DB를 적재하고 준비 상태에 표시한다. 나머지 부품이 끝나야 ready."""
-    app = create_app(Settings(_env_file=None))
+    app = create_app(Settings(_env_file=None, fake_auto_ready=False))
     with TestClient(app) as c:
         assert app.state.manual_db.version == real_db["meta"]["version"].split()[0]
         assert c.get("/api/health").json()["data"]["ready"] is False
