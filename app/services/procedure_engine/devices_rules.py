@@ -115,8 +115,7 @@ def _timer(run: Run, typ: int, source: str) -> bool:
         elapsed = timer.elapsed_s(now)
         run.say_template("T_DEV_TIMER_CHECK", min=read_count(elapsed // 60), sec=read_count(elapsed % 60))
     elif typ == 3:
-        if timer.starts_after is not None:
-            cancel_timer_start(run)  # 시작 전에 일시정지가 오면 시작을 취소한다
+        cancel_timer_start(run)  # 시작 전에 일시정지가 오면 시작을 취소한다
         if timer.status != "running":
             run.say_template("T_DEV_ALREADY_OFF")
             result = "already"
@@ -127,8 +126,7 @@ def _timer(run: Run, typ: int, source: str) -> bool:
             run.say_template("T_DEV_TIMER_PAUSE", min=read_count(elapsed // 60), sec=read_count(elapsed % 60))
     elif typ == 4:
         if timer.status == "idle":
-            if timer.starts_after is not None:
-                cancel_timer_start(run)
+            cancel_timer_start(run)
             run.say_template("T_DEV_ALREADY_OFF")  # 저장할 구간이 없음
             result = "already"
         elif source == "button":
