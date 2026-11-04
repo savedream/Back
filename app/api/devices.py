@@ -18,6 +18,7 @@ from app.schemas.record import DeviceResultRecord
 from app.schemas.session import SessionState
 from app.services.procedure_engine.actions import DeviceAction, EngineResult, RecordAction
 from app.services.procedure_engine.inputs import DeviceButtonInput
+from app.services.procedure_engine.view import timer_view
 
 router = APIRouter()
 
@@ -136,9 +137,7 @@ class TimerOut(BaseModel):
 
 
 def _timer_view(request: Request, state: SessionState) -> TimerView:
-    timer = state.timer
-    return TimerView(status=timer.status, elapsed_s=timer.elapsed_s(request.app.state.parts.clock.now()),
-                     started_at=timer.started_at)
+    return TimerView(**timer_view(state.timer, request.app.state.parts.clock.now()))
 
 
 def _recorded_result(result: EngineResult, obj: int, typ: int) -> str | None:

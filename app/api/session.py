@@ -15,7 +15,7 @@ from app.services.manual_db import ManualDB
 from app.services.procedure_engine.context import Ctx
 from app.services.procedure_engine.inputs import SessionResetInput
 from app.services.procedure_engine.timers import listen_state
-from app.services.procedure_engine.view import session_fields
+from app.services.procedure_engine.view import session_fields, timer_view
 
 router = APIRouter()
 
@@ -109,8 +109,7 @@ def _session_data(state: SessionState, ctx: Ctx, seq: int, mic: str, records: li
                  "ends_at": ctx.iso(a.deadline - ctx.now) if a.deadline is not None else None,
                  "on_timeout": a.on_timeout} for a in state.alerts],
         devices={name: d.model_dump() for name, d in state.devices.items()},
-        timer={"object": 3, "status": state.timer.status, "elapsed_s": state.timer.elapsed_s(ctx.now),
-               "started_at": state.timer.started_at},
+        timer=timer_view(state.timer, ctx.now),
         mic=mic,
         conversation=_conversation(records),
     )

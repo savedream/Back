@@ -1,7 +1,9 @@
 """session.updated 데이터: SessionState에서 화면이 보는 칸 중 바뀐 것 (명세서 GET /api/events, 공통 데이터 형식 SessionState).
 
-알림·기기·타이머는 alert.*·device.state·timer.tick으로 따로 나가므로 여기서 다루지 않는다.
+알림·기기·타이머는 alert.*·device.state·timer.tick으로 따로 나가므로 session.updated에서 다루지 않는다. 타이머의 화면용
+모양(timer_view)은 timer.tick과 API 응답이 같이 쓴다.
 """
+from app.schemas.device import TimerState
 from app.schemas.session import SessionState
 from app.services.procedure_engine.context import Ctx
 
@@ -23,6 +25,11 @@ def session_fields(state: SessionState, ctx: Ctx) -> dict:
             "expires_at": expires_at,
         }
     return data
+
+
+def timer_view(timer: TimerState, now: float) -> dict:
+    """화면용 TimerState(공통 데이터 형식): 엔진 안의 칸(accumulated_s, running_since, starts_after)은 빼고 경과 초로."""
+    return {"object": 3, "status": timer.status, "elapsed_s": timer.elapsed_s(now), "started_at": timer.started_at}
 
 
 def session_changes(before: SessionState | None, after: SessionState, ctx: Ctx) -> dict:
