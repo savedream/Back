@@ -23,6 +23,10 @@ class Readiness:
     def mark_ready(self, component: Component) -> None:
         self._done.add(component)
 
+    def is_ready(self, component: Component) -> bool:
+        """그 부품의 적재(LLM_WARMUP은 예열)가 끝났는지(GET /api/devices의 models·manual_db)."""
+        return component in self._done
+
     @property
     def ready(self) -> bool:
         return self._done.issuperset(Component)
