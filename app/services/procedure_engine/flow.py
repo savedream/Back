@@ -241,10 +241,12 @@ def cancel_alerts(run: Run, match=None, reason: str = "cancel") -> None:
 # GPS 낭독 (6-11)
 def announce_gps(run: Run) -> None:
     loc = run.ctx.location
-    if loc is not None and loc.fix:
+    if loc is None:
+        return  # GPS 모듈이 없으면 건너뛴다. 다시 시도해도 잡히지 않는다(명세서 POST /api/location/announce)
+    if loc.fix:
         run.say_template("T_GPS_OK", lat=read_coordinate(loc.lat), lon=read_coordinate(loc.lon))
         run.s.gps_retry = None
-    elif loc is not None and loc.last_known is not None and loc.last_known.age_s <= C.GPS_LAST_KNOWN_MAX_S:
+    elif loc.last_known is not None and loc.last_known.age_s <= C.GPS_LAST_KNOWN_MAX_S:
         last = loc.last_known
         run.say_template("T_GPS_LAST", ago=read_count(last.age_s // 60), lat=read_coordinate(last.lat),
                          lon=read_coordinate(last.lon))

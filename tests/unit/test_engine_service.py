@@ -8,7 +8,7 @@ import pytest
 
 from app.services.procedure_engine import service as service_module
 from app.services.procedure_engine.actions import EngineResult
-from app.schemas.device import DeviceCommand
+from app.schemas.device import DeviceCommand, Location
 from app.services.procedure_engine.inputs import (
     BargeInInput, DeviceButtonInput, LocationUpdateInput, SpeechActivityInput,
 )
@@ -191,7 +191,7 @@ async def test_alert_during_speech_does_not_freeze_engine(kit):
 
 
 async def test_late_gps_is_not_cut_by_no_speech():
-    kit = ShellKit(location=None)
+    kit = ShellKit(location=Location(fix=False))  # 위치를 아직 못 잡음(None은 GPS 모듈 없음)
     await kit.start()
     try:
         await kit.say("사람이 쓰러졌는데 숨을 안 쉬어")
