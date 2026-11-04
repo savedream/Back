@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from app.api import devices, events, location, manuals, records, session, speech, system, utterances
+from app.api import devices, events, location, manuals, mic, records, session, speech, system, utterances
 from app.common.handlers import install_error_handlers
 from app.config import Settings, get_settings
 from app.core.parts import build_parts
@@ -65,6 +65,7 @@ def create_app(settings: Settings | None = None, *, clock: Clock | None = None) 
     api.include_router(events.router)
     api.include_router(utterances.router)
     api.include_router(speech.router)
+    api.include_router(mic.router)
     api.include_router(session.router)
     api.include_router(records.router)
     api.include_router(devices.router)
