@@ -140,16 +140,21 @@ class UtteranceReply(BaseModel):
 _LATENCY_KEYS = ("vad_tail", "stt", "normalize", "model", "parse", "engine")
 
 
-async def run_utterance(parts: Parts, model_timeout_s: float, turn_id: str, text: str, speak: bool) -> UtteranceReply:
+async def run_utterance(parts: Parts, model_timeout_s: float, turn_id: str, text: str, speak: bool,
+                        started: float | None = None, latency: dict[str, int] | None = None) -> UtteranceReply:
     """문장 하나로 한 턴을 처리한다. speak=False면 낭독 대신 바로 끝난 것으로 처리한 뒤(알림 시작 시각까지 반영) 돌려주고,
-    speak=True면 엔진 결과가 나오면 바로 돌려준다(낭독은 기다리지 않음)."""
+    speak=True면 엔진 결과가 나오면 바로 돌려준다(낭독은 기다리지 않음).
+
+    started: 지연(turn.latency e2e)의 t0(time.perf_counter). 없으면 지금(텍스트 턴), 말하기 버튼 턴은 말하기 완료 호출 시각.
+    latency: 이 턴에서 앞서 잰 단계 시간(음성 턴의 stt).
+    """
     engine, sequencer = parts.engine, parts.engine.sequencer
-    started = time.perf_counter()
+    started = time.perf_counter() if started is None else started
     sequencer.set_speech_state("processing")
     # 턴을 처리하는 동안 무응답·대기 타이머를 멈추고 절차 알림은 턴이 끝난 뒤로 미룬다(6-9, 6-12)
     engine.post(SpeechActivityInput(state="started"))
     try:
-        return await _run_turn(parts, model_timeout_s, turn_id, text, speak, started)
+        return await _run_turn(parts, model_timeout_s, turn_id, text, speak, started, dict(latency or {}))
     except Exception:
         engine.post(SpeechActivityInput(state="cancelled"))
         _back_to_listening(parts)  # 실패해도 "처리 중"이 남지 않게
@@ -166,11 +171,11 @@ def _back_to_listening(parts: Parts) -> None:
 
 
 async def _run_turn(parts: Parts, model_timeout_s: float, turn_id: str, text: str, speak: bool,
-                    started: float) -> UtteranceReply:
+                    started: float, latency: dict[str, int]) -> UtteranceReply:
     engine = parts.engine
-    latency: dict[str, int] = {}
+    start = time.perf_counter()
     normalized = normalize(text)
-    latency["normalize"] = _elapsed_ms(started)
+    latency["normalize"] = _elapsed_ms(start)
     state = engine.state  # 말소리가 잡힌 시점의 위치를 들고 간다(6-1)
     base = {"turn_id": turn_id, "epoch": state.epoch, "step_id": state.step_id, "text": text,
             "normalized": normalized.text}
