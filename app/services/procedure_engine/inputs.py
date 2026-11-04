@@ -102,6 +102,13 @@ class SpeechActivityInput(BaseModel):
     state: Literal["started", "ended", "cancelled"]
 
 
+class CaptureInput(BaseModel):
+    """말하기 버튼 녹음 시작·끝(capturing). 녹음 동안 켜 둔 구조신호를 멈춘다(held_by recording, ⑦)."""
+
+    kind: Literal["capture"] = "capture"
+    state: Literal["started", "ended"]
+
+
 class MicInput(BaseModel):
     """마이크 연결·끊김(mic_event)과 일시정지 설정(mic_setting)."""
 
@@ -134,6 +141,7 @@ EngineInput = Annotated[
     | RecordSavedInput
     | LocationUpdateInput
     | SpeechActivityInput
+    | CaptureInput
     | MicInput
     | TickInput
     | SessionResetInput,
