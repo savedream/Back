@@ -243,15 +243,21 @@ def test_volume_before_ready_is_503(client, path):
     assert res.status_code == 503 and res.json()["error"]["code"] == "NOT_READY"
 
 
+def timer_start_records(kit: Kit) -> list:
+    return [r for r in kit.records if r.kind == "device_result" and (r.object, r.type) == (3, 1)]
+
+
 async def test_timer_start_pause_resume(kit):
-    """시작 → 30초 뒤 일시정지 → 이어서 재기. 응답의 timer는 엔진이 받아들인 뒤의 상태."""
+    """시작 → 30초 뒤 일시정지 → 이어서 재기. 응답의 timer는 엔진이 받아들인 뒤의 상태다. 시작·재개는 확인 문장이 끝난
+    뒤라 응답에는 바뀌기 전 상태(idle·paused)가 나가고(AC-E1), 일시정지는 누른 순간 멈춘다(AC-E2)."""
     mark = len(kit.spoken)
     data = await press(kit, "/api/timer/start")
     assert list(data) == ["turn_id", "result", "timer"] and data["result"] == "pending"
-    started_at = kit.state.timer.started_at
-    assert data["timer"] == {"object": 3, "status": "running", "elapsed_s": 0, "started_at": started_at}
-    assert started_at is not None
+    assert data["timer"] == {"object": 3, "status": "idle", "elapsed_s": 0, "started_at": None}
     await kit.settle()
+    started_at = kit.state.timer.started_at
+    assert kit.state.timer.status == "running" and started_at is not None
+    assert [(r.source, r.turn_id, r.result) for r in timer_start_records(kit)] == [("button", data["turn_id"], "success")]
     await kit.advance(30)
 
     data = await press(kit, "/api/timer/pause")
@@ -262,8 +268,9 @@ async def test_timer_start_pause_resume(kit):
 
     data = await press(kit, "/api/timer/start")
     assert data["result"] == "pending"
-    assert data["timer"] == {"object": 3, "status": "running", "elapsed_s": 30, "started_at": started_at}
+    assert data["timer"] == {"object": 3, "status": "paused", "elapsed_s": 30, "started_at": started_at}
     await kit.settle()
+    assert kit.state.timer.status == "running" and len(timer_start_records(kit)) == 2
     assert templates_since(kit, mark) == ["T_DEV_TIMER_START", "T_DEV_TIMER_PAUSE", "T_DEV_TIMER_RESUME"]
 
 
@@ -285,7 +292,7 @@ async def test_timer_already(kit, path, template):
 async def test_timer_queued_while_reading(kit):
     speaker = await reading_guidance(kit)
     data = await press(kit, "/api/timer/start")
-    assert data["result"] == "queued"
+    assert data["result"] == "queued" and data["timer"]["status"] == "idle"  # 확인 문장 뒤에 시작(AC-E1)
     speaker.release()
     await kit.settle()
     assert kit.state.timer.status == "running"

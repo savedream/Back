@@ -2,7 +2,7 @@
 
 시간은 상태의 마감 시각으로 두고, 셸이 가장 이른 마감에 TickInput을 넣는다. epoch로 버리지 않고 규칙으로만 취소한다.
 """
-from app.schemas.record import KitGuidanceRecord
+from app.schemas.record import DeviceResultRecord, KitGuidanceRecord
 from app.schemas.session import SessionState
 from app.services.procedure_engine import engine_constants as C
 from app.services.procedure_engine.context import Run
@@ -100,8 +100,8 @@ def handle_playback(run: Run, action_id: str, event: str, result: str | None) ->
 
 
 def confirm_finished(run: Run, action_id: str) -> None:
-    """기기 확인 문장의 낭독이 끝남(끊겨도 같음): 그 문장 뒤로 미룬 켜기의 queued를 푼다. 시퀀서는 바로 다음에 그 명령을
-    실행한다."""
+    """기기 확인 문장의 낭독이 끝남(끊겨도 같음): 그 문장 뒤로 미룬 켜기의 queued를 풀고(시퀀서는 바로 다음에 그 명령을
+    실행한다), 그 문장 뒤로 미룬 타이머 시작·재개를 한다."""
     for command in run.s.pending_devices.values():
         if command.get("after_say") != action_id:
             continue
@@ -109,6 +109,22 @@ def confirm_finished(run: Run, action_id: str) -> None:
         if device.queued is not None:
             device.queued = None
             run.event("device.state", device.model_dump())
+    starts_after = run.s.timer.starts_after
+    if starts_after is not None and starts_after.action_id == action_id:
+        start_after_confirm(run)
+
+
+def start_after_confirm(run: Run) -> None:
+    """미룬 타이머 시작·재개를 지금 한다(AC-E1). 그사이 단계 timer:start가 먼저 시작했으면 그 구간을 그대로 둔다."""
+    timer = run.s.timer
+    pending, timer.starts_after = timer.starts_after, None
+    if timer.status == "running":
+        return
+    if timer.status == "idle":
+        timer.started_at = run.ctx.iso()
+    timer.status, timer.running_since = "running", run.ctx.now
+    run.record(DeviceResultRecord(**{**run.record_base(), "turn_id": pending.turn_id}, object=3, type=1,
+                                  source=pending.source, result="success", step_id=pending.step_id))
 
 
 def end_announcing(run: Run) -> None:

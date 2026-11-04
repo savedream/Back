@@ -2,11 +2,14 @@
 
 음성·버튼 요청은 T_DEV_* 확인 문장을 읽고, 장치는 그 문장이 끝난 직후 실행한다(actions 순서). 동작 후 원래 질문을 다시 묻는다.
 """
+from app.schemas.device import PendingStart
 from app.schemas.record import DeviceResultRecord
 from app.services.procedure_engine import engine_constants as C
 from app.services.procedure_engine.context import Run
 from app.services.procedure_engine.flow import announce_gps, set_sound_device
-from app.services.procedure_engine.interrupts import clear_prompt, open_prompt, reask, save_timer_record
+from app.services.procedure_engine.interrupts import (
+    cancel_timer_start, clear_prompt, open_prompt, reask, save_timer_record,
+)
 from app.services.procedure_engine.templates import SOUND_DEVICES_SPOKEN, read_count
 
 _SOUND = {2: ("metronome", "T_DEV_METRO_ON", "T_DEV_METRO_OFF"), 4: ("rescue_signal", "T_DEV_SOS_ON", "T_DEV_SOS_OFF")}
@@ -92,23 +95,26 @@ def _no_target(run: Run, on: bool, source: str) -> bool:
 
 
 def _timer(run: Run, typ: int, source: str) -> bool:
-    """경과 시간 타이머(엔진 상태). 초기화 확인 질문을 걸었으면 True."""
+    """경과 시간 타이머(엔진 상태). 초기화 확인 질문을 걸었으면 True.
+
+    시작·재개는 확인 문장이 끝난 뒤에 하고(그때 기록, timers.start_after_confirm), 일시정지는 누른 순간 멈춘다(AC-E1·E2).
+    """
     timer, now = run.s.timer, run.ctx.now
     result = "success"
     if typ == 1:
-        if timer.status == "running":
+        if timer.status == "running" or timer.starts_after is not None:
             run.say_template("T_DEV_ALREADY_ON")
             result = "already"
         else:
             template = "T_DEV_TIMER_START" if timer.status == "idle" else "T_DEV_TIMER_RESUME"
-            run.say_template(template)
-            if timer.status == "idle":
-                timer.started_at = run.ctx.iso()
-            timer.status, timer.running_since = "running", now
+            timer.starts_after = PendingStart(action_id=run.say_template(template), source=source, turn_id=run.turn_id)
+            return False
     elif typ == 2:
         elapsed = timer.elapsed_s(now)
         run.say_template("T_DEV_TIMER_CHECK", min=read_count(elapsed // 60), sec=read_count(elapsed % 60))
     elif typ == 3:
+        if timer.starts_after is not None:
+            cancel_timer_start(run)  # 시작 전에 일시정지가 오면 시작을 취소한다
         if timer.status != "running":
             run.say_template("T_DEV_ALREADY_OFF")
             result = "already"
@@ -119,6 +125,8 @@ def _timer(run: Run, typ: int, source: str) -> bool:
             run.say_template("T_DEV_TIMER_PAUSE", min=read_count(elapsed // 60), sec=read_count(elapsed % 60))
     elif typ == 4:
         if timer.status == "idle":
+            if timer.starts_after is not None:
+                cancel_timer_start(run)
             run.say_template("T_DEV_ALREADY_OFF")  # 저장할 구간이 없음
             result = "already"
         elif source == "button":

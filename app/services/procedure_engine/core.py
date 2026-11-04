@@ -154,6 +154,8 @@ def resume_session(state: SessionState, ctx: Ctx, saved_now: float, downtime_s: 
             alert.deadline += shift
     if s.timer.running_since is not None:
         s.timer.running_since += shift
+    if s.timer.starts_after is not None:
+        timers.start_after_confirm(run)  # 확인 문장은 다시 읽지 않으므로 이어 가는 지금 시작한다
     if s.gps_retry is not None:
         s.gps_retry.give_up_at += shift
     s.pending_says, s.speech_active, s.pending_devices, s.timer_reset_record = {}, False, {}, None
