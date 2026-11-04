@@ -16,6 +16,9 @@ from tests.unit.engine_kit import FIX, ids
 from tests.unit.shell_kit import ShellKit, until_idle, until_speaking
 
 
+RESCUE_ON = DeviceButtonInput(turn_id="t_btn", command=DeviceCommand(object=4, type=1, source="button"))
+
+
 @pytest.fixture
 async def kit():
     k = ShellKit()
@@ -304,7 +307,7 @@ async def test_failed_playback_feedback_does_not_stop_timers(kit, monkeypatch):
 async def test_failed_started_feedback_still_speaks_and_leaves_no_hold(kit, monkeypatch):
     """시작 되먹임 처리가 실패해도 문장은 읽고 kit_guidance를 남기며, 구조신호 멈춤(held_by)이 남지 않는다."""
     await at_s1b(kit)
-    await kit.engine.submit(DeviceButtonInput(turn_id="t_btn", command=DeviceCommand(object=4, type=1, source="button")))
+    await kit.engine.submit(RESCUE_ON)
     await kit.settle()
     failures = fail_once(monkeypatch, "playback", "started")
     mark = len(kit.records.records)
@@ -320,7 +323,7 @@ async def test_failed_started_feedback_still_speaks_and_leaves_no_hold(kit, monk
 async def test_hold_gate_closes_once_per_batch(kit):
     """문장 세 개 묶음 동안 구조신호 관문은 한 번 닫고 한 번 연다(문장 사이에 열지 않음). held_by 변화도 두 번."""
     await at_s1b(kit)
-    await kit.engine.submit(DeviceButtonInput(turn_id="t_btn", command=DeviceCommand(object=4, type=1, source="button")))
+    await kit.engine.submit(RESCUE_ON)
     await kit.settle()
     assert kit.devices.holds == [(4, True), (4, False)]  # 켜는 묶음(확인 문장·다시 묻기)에도 멈췄다가 울린다
     events, holds = len(kit.events), len(kit.devices.holds)

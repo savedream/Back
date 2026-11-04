@@ -169,7 +169,8 @@ def test_sound_on_while_reading_is_queued_until_its_confirm_ends(kit, name, sour
     mark = len(kit.events)
     kit.finish()  # 켜기 확인 문장
     assert kit.state.devices[name].queued is None
-    assert [e.data["queued"] for e in kit.events[mark:] if e.type == "device.state" and e.data["name"] == name] == [None]
+    states = [e.data for e in kit.events[mark:] if e.type == "device.state" and e.data["name"] == name]
+    assert [d["queued"] for d in states] == [None]
 
 
 def test_replace_does_not_queue_on_dropped_guidance(kit):
@@ -220,4 +221,5 @@ def test_volume_status_changed_only_when_volume_changes(kit):
     for _ in range(4):
         kit.say("소리 키워 줘")
     assert kit.state.volume == 100
-    assert [e.data for e in kit.events if e.type == "status.changed"] == [{"speaker": {"volume": v}} for v in (80, 90, 100)]
+    changed = [e.data for e in kit.events if e.type == "status.changed"]
+    assert changed == [{"speaker": {"volume": v}} for v in (80, 90, 100)]

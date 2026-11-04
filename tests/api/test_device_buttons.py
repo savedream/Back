@@ -114,7 +114,8 @@ async def test_rescue_signal_off_cancels_queued_on(kit):
     speaker.release()
     await kit.settle()
     assert [c for c in kit.parts.devices.commands if c.object == 4] == [] and kit.parts.devices.on == set()
-    cancelled = [(r.object, r.type, r.source) for r in kit.records if r.kind == "device_result" and r.result == "cancelled"]
+    cancelled = [(r.object, r.type, r.source) for r in kit.records
+                 if r.kind == "device_result" and r.result == "cancelled"]
     assert cancelled == [(4, 1, "button")]
     said = [u.template_id for u in speaker.spoken]
     assert said.index("T_DEV_SOS_ON") < said.index("T_DEV_SOS_OFF")  # 이미 큐에 있던 켜기 확인 문장도 읽는다(기본값 2)
@@ -268,7 +269,8 @@ async def test_timer_start_pause_resume(kit):
     await kit.settle()
     started_at = kit.state.timer.started_at
     assert kit.state.timer.status == "running" and started_at is not None
-    assert [(r.source, r.turn_id, r.result) for r in timer_start_records(kit)] == [("button", data["turn_id"], "success")]
+    records = [(r.source, r.turn_id, r.result) for r in timer_start_records(kit)]
+    assert records == [("button", data["turn_id"], "success")]
     await kit.advance(30)
 
     data = await press(kit, "/api/timer/pause")
