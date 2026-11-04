@@ -76,7 +76,11 @@ def sync_timers(run: Run) -> None:
 
 
 def handle_playback(run: Run, action_id: str, event: str, result: str | None) -> None:
-    if event != "finished":
+    if event == "started":
+        pending = run.s.pending_says.get(action_id)
+        if pending is not None and not pending.dropped:
+            pending.started = True
+            run.s.announcing = True
         return
     pending = run.s.pending_says.pop(action_id, None)
     if pending is not None:
@@ -91,6 +95,34 @@ def handle_playback(run: Run, action_id: str, event: str, result: str | None) ->
     prompt = run.s.pending_prompt
     if prompt is not None and prompt.waits_for_action == action_id:
         prompt.waits_for_action = None  # 확인 질문을 다 읽음. 15초는 sync_timers가 건다
+    end_announcing(run)
+
+
+def end_announcing(run: Run) -> None:
+    """버려지지 않은 읽을 문장이 다 끝나면 안내 중이 끝난다."""
+    if not any(not p.dropped for p in run.s.pending_says.values()):
+        run.s.announcing = False
+
+
+def hold_reason(state: SessionState, name: str) -> str | None:
+    """소리 충돌(⑦): 켜 둔(want on) 소리 기능을 잠시 멈출 까닭. 구조신호는 말하기 버튼 녹음 중이면 recording(먼저 봄),
+    안내 중이면 tts. 메트로놈은 압박 구간(cpr)이면 안내 중에도 멈추지 않는다."""
+    if state.devices[name].want != "on":
+        return None
+    if name == "rescue_signal" and state.capturing:
+        return "recording"
+    if name == "metronome" and "cpr" in state.flags:
+        return None
+    return "tts" if state.announcing else None
+
+
+def sync_holds(run: Run) -> None:
+    """입력 하나를 처리한 끝에 held_by를 상태에 맞추고 바뀐 기능은 device.state로 알린다. 장치는 셸이 held_by에 맞춘다."""
+    for name, device in run.s.devices.items():
+        reason = hold_reason(run.s, name)
+        if device.held_by != reason:
+            device.held_by = reason
+            run.event("device.state", device.model_dump())
 
 
 def handle_tick(run: Run) -> None:

@@ -39,6 +39,8 @@ class EngineService:
         self._session_ids = session_ids  # 이미 쓴 세션 ID(세션 표)
         self._on_state = on_state  # 상태가 바뀌면 부른다. 상태 스냅샷(6-14)을 저장하는 데 쓴다
         self.state: SessionState | None = None
+        self._devices = devices
+        self._held: set[int] = set()  # 음소거 관문을 닫아 둔 소리 기능(object)
         self.sequencer = Sequencer(db, events, speaker, devices, records, self.submit, lambda: self.state, clock,
                                    device_timeout_s)
         self._queue: asyncio.Queue[tuple[EngineInput, bool, asyncio.Future]] = asyncio.Queue()
@@ -157,6 +159,7 @@ class EngineService:
             before = self.state
             self.state = recover(before, inp, self._ctx()).state
             self._state_changed(before)
+            self._sync_holds()
         except Exception:
             log.exception("실패한 입력 뒤 정리도 실패: %s", inp.kind)
 
@@ -181,7 +184,30 @@ class EngineService:
             self._publish("session.updated", result.turn_id, changes)
         for e in (e for e in events if e.type != "turn.result"):
             self._publish(e.type, result.turn_id, e.data)
+        self._sync_holds()
         return batch
+
+    def _sync_holds(self) -> None:
+        """held_by에 맞춰 소리 기능의 음소거 관문을 여닫는다(⑦ 소리 충돌). 멈춤이 풀려도 연결돼 있고 status가 확정값(on·off)일
+        때만 연다. 멈춘 동안 끄기 요청이 왔거나 장치 오류면 다음 성공 결과로 status가 정해질 때까지 닫아 둔다."""
+        for device in self.state.devices.values():
+            obj = device.object
+            if device.held_by is not None and obj not in self._held:
+                held = True
+            elif (device.held_by is None and obj in self._held and device.connected
+                  and device.status in ("on", "off")):
+                held = False
+            else:
+                continue
+            try:
+                self._devices.set_hold(obj, held)
+            except Exception:
+                log.exception("소리 기능 멈춤 처리 실패: %s", device.name)
+                continue
+            if held:
+                self._held.add(obj)
+            else:
+                self._held.discard(obj)
 
     def _state_changed(self, before: SessionState | None) -> None:
         if self._on_state is not None and self.state != before:

@@ -3,6 +3,7 @@ import asyncio
 
 import pytest
 
+from app.services.procedure_engine.inputs import DeviceResultInput
 from tests.scenario.kit import Kit
 from tests.unit.shell_kit import ScriptSpeaker, until_speaking
 
@@ -97,6 +98,59 @@ async def test_rescue_signal_queued_while_reading(kit):
     question = kit.state.step_id
     assert said.index("T_DEV_SOS_ON") > said.index(question)  # 읽던 질문 뒤에 확인 문장
     assert said[-2:] == ["T_DEV_SOS_ON", question]  # 동작 뒤 질문 다시(6-10)
+
+
+async def until_commanded(kit: Kit, obj: int, typ: int) -> None:
+    for _ in range(1000):
+        if any((c.object, c.type) == (obj, typ) for c in kit.parts.devices.commands):
+            return
+        await asyncio.sleep(0)
+    raise AssertionError("장치 명령이 나가지 않음")
+
+
+async def held_rescue_signal(kit: Kit) -> ScriptSpeaker:
+    """구조신호를 켜 두고 안내 문장을 읽는 중(held_by tts, 음소거 관문 닫힘)."""
+    await press(kit, "/api/rescue-signal/on")
+    await kit.settle()
+    devices = kit.parts.devices
+    assert devices.on == {4} and devices.held == set()
+    speaker = await reading_guidance(kit)
+    assert kit.state.devices["rescue_signal"].held_by == "tts" and devices.held == {4}
+    return speaker
+
+
+@pytest.mark.parametrize("failure", ["failed", "timeout"])
+async def test_rescue_signal_stays_muted_when_off_fails_while_held(kit, failure):
+    """멈춘 동안 끄기 요청이 오고 장치가 실패하면 다시 울리지 않는다(⑦). 다음 성공으로 꺼짐이 확정되면 관문을 연다."""
+    devices = kit.parts.devices
+    speaker = await held_rescue_signal(kit)
+    devices.fail_next(failure)
+    await press(kit, "/api/rescue-signal/off")
+    mark = len(devices.holds)
+    speaker.release()
+    await until_commanded(kit, 4, 2)
+    await kit.advance(2)  # 장치 응답 제한
+    rescue = kit.state.devices["rescue_signal"]
+    assert (rescue.status, rescue.last_result, rescue.held_by) == ("unknown", failure, None)
+    assert devices.on == {4} and devices.held == {4} and devices.holds[mark:] == []  # 관문을 닫아 둔다
+    await press(kit, "/api/rescue-signal/off")  # 확인되지 않은(unknown) 기능이라 다시 명령한다
+    await kit.settle()
+    assert kit.state.devices["rescue_signal"].status == "off" and devices.on == set()
+    assert devices.held == set() and devices.holds[mark:] == [(4, False)]
+
+
+async def test_rescue_signal_stays_muted_after_disconnect_while_held(kit):
+    """멈춘 동안 장치가 끊기면 안내가 끝나도 관문을 열지 않는다. 다시 연결돼 꺼짐(off)이 확정되면 연다."""
+    devices = kit.parts.devices
+    speaker = await held_rescue_signal(kit)
+    mark = len(devices.holds)
+    await kit.parts.engine.submit(DeviceResultInput(action_id=None, object=4, status="disconnected"))
+    speaker.release()
+    await kit.settle()
+    assert kit.state.devices["rescue_signal"].held_by is None and devices.held == {4} and devices.holds[mark:] == []
+    await kit.parts.engine.submit(DeviceResultInput(action_id=None, object=4, status="connected"))
+    await kit.settle()
+    assert kit.state.devices["rescue_signal"].status == "off" and devices.holds[mark:] == [(4, False)]
 
 
 async def test_rescue_signal_speaker_unavailable(kit):

@@ -73,6 +73,7 @@ class PendingSay(BaseModel):
     turn_id: str | None = None  # 이 문장을 낸 턴. kit_guidance 기록에 쓴다(guide.say와 같은 값)
     call_stack: list[Frame] = []  # 이 문장을 낼 때의 call_stack. 말하기 버튼으로 이 단계에 되돌아올 때 되살린다
     dropped: bool = False  # 위치가 바뀌어(replace) 버려졌는데 아직 cut 되먹임이 오지 않은 문장
+    started: bool = False  # 시퀀서가 낭독 시작(소리 나기 직전)을 알림
 
 
 class Alert(BaseModel):
@@ -147,6 +148,9 @@ class SessionState(BaseModel):
     last_utterance: Utterance | None = None  # 반복 요청 scope 1 대상
     pending_says: dict[str, PendingSay] = {}  # 낭독이 아직 안 끝난 say 액션(action_id → 문장), 순서 유지
     speech_active: bool = False  # 말소리를 받는 중(무응답·대기 타이머 정지, 알림 미룸)
+    # 안내 중(묶음 단위): 묶음의 첫 소리(started)부터 버려지지 않은 읽을 문장이 다 끝날 때까지. 문장 사이에 풀리지 않는다
+    announcing: bool = False
+    capturing: bool = False  # 말하기 버튼 녹음 중(구조신호 held_by recording)
     timer_reset_record: str | None = None  # 타이머 초기화 전에 저장 중인 기록 액션
     pending_devices: dict[str, dict] = {}  # 응답을 기다리는 장치 명령(action_id → object·type·source·step_id)
     last_off_device: int | None = None  # 대상 없는 켜기용 직전에 끈 소리 기능(2 또는 4)

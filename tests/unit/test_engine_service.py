@@ -280,12 +280,12 @@ async def test_failed_tick_skips_only_that_deadline(kit, monkeypatch):
     assert ids(await kit.advance(15)) == [("template", "T_NO_SPEECH"), ("step", "EM03-04")]  # 다른 마감은 그대로
 
 
-def fail_once(monkeypatch, kind: str) -> list:
+def fail_once(monkeypatch, kind: str, event: str | None = None) -> list:
     real_reduce = service_module.reduce
     failures = []
 
     def broken(state, inp, ctx):
-        if inp.kind == kind and not failures:
+        if inp.kind == kind and (event is None or inp.event == event) and not failures:
             failures.append(inp)
             raise RuntimeError("시험용 오류")
         return real_reduce(state, inp, ctx)
@@ -295,10 +295,40 @@ def fail_once(monkeypatch, kind: str) -> list:
 
 
 async def test_failed_playback_feedback_does_not_stop_timers(kit, monkeypatch):
-    failures = fail_once(monkeypatch, "playback")
+    failures = fail_once(monkeypatch, "playback", "finished")  # 끝 되먹임(시작 되먹임 실패는 아래 시험)
     await kit.say("등산하다 넘어졌는데 다리를 움직이기 어려워요")
     assert failures and kit.state.pending_says == {}  # 실패한 낭독 끝 되먹임도 읽은 것으로 정리
     assert ids(await kit.advance(15)) == [("template", "T_NO_SPEECH"), ("step", "EM03-01")]
+
+
+async def test_failed_started_feedback_still_speaks_and_leaves_no_hold(kit, monkeypatch):
+    """시작 되먹임 처리가 실패해도 문장은 읽고 kit_guidance를 남기며, 구조신호 멈춤(held_by)이 남지 않는다."""
+    await at_s1b(kit)
+    await kit.engine.submit(DeviceButtonInput(turn_id="t_btn", command=DeviceCommand(object=4, type=1, source="button")))
+    await kit.settle()
+    failures = fail_once(monkeypatch, "playback", "started")
+    mark = len(kit.records.records)
+    assert ids(await kit.say("다시 말해 줘")) == [("step", "EM03-04")]
+    assert failures
+    played = [(r.utterance.step_id, r.played) for r in kit.records.records[mark:] if r.kind == "kit_guidance"]
+    assert played == [("EM03-04", "done")]
+    rescue = kit.state.devices["rescue_signal"]
+    assert kit.state.pending_says == {} and not kit.state.announcing
+    assert rescue.held_by is None and kit.devices.held == set()
+
+
+async def test_hold_gate_closes_once_per_batch(kit):
+    """문장 세 개 묶음 동안 구조신호 관문은 한 번 닫고 한 번 연다(문장 사이에 열지 않음). held_by 변화도 두 번."""
+    await at_s1b(kit)
+    await kit.engine.submit(DeviceButtonInput(turn_id="t_btn", command=DeviceCommand(object=4, type=1, source="button")))
+    await kit.settle()
+    assert kit.devices.holds == [(4, True), (4, False)]  # 켜는 묶음(확인 문장·다시 묻기)에도 멈췄다가 울린다
+    events, holds = len(kit.events), len(kit.devices.holds)
+    assert ids(await kit.say("네 많이 휘었어요")) == [("step", "EM03-05"), ("step", "EM03-06"), ("step", "EM03-07")]
+    changes = [e.data["held_by"] for e in kit.events[events:]
+               if e.type == "device.state" and e.data["name"] == "rescue_signal"]
+    assert changes == ["tts", None]
+    assert kit.devices.holds[holds:] == [(4, True), (4, False)] and kit.devices.held == set()
 
 
 async def test_failed_turn_after_speech_does_not_freeze_alerts(kit, monkeypatch):
