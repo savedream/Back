@@ -7,7 +7,8 @@ from app.main import create_app
 
 @pytest.fixture
 def settings() -> Settings:
-    return Settings(_env_file=None)
+    # 준비 전 동작(503 NOT_READY 등)을 시험할 수 있게 기본은 자동 준비를 끈다. 시나리오 시험만 켠다
+    return Settings(_env_file=None, fake_auto_ready=False)
 
 
 @pytest.fixture
