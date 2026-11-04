@@ -9,6 +9,7 @@ import pytest
 
 from app.core import turn as turn_module
 from app.services.procedure_engine.inputs import MicInput
+from tests.api.test_utterances import hold_model, until
 from tests.scenario.kit import Kit, ids
 from tests.unit.shell_kit import ScriptSpeaker, until_speaking
 
@@ -91,19 +92,9 @@ async def test_start_while_capturing_or_processing_is_409(kit):
 
 
 async def test_start_while_text_turn_is_processing_is_409(kit):
-    gate = asyncio.Event()
-    run = kit.model.run
-
-    async def held(text: str) -> str:
-        await gate.wait()
-        return await run(text)
-
-    kit.model.run = held
+    gate = hold_model(kit)
     first = asyncio.create_task(kit.post(FALLEN))
-    for _ in range(1000):
-        if kit.app.state.turn_lock.busy:
-            break
-        await asyncio.sleep(0)
+    await until(lambda: kit.app.state.turn_lock.busy)
     res = await kit.http.post("/api/speech/start")
     assert res.status_code == 409 and res.json()["error"]["code"] == "AUDIO_BUSY"
     gate.set()
@@ -324,19 +315,18 @@ def test_not_ready_is_503(client, path):
 
 @pytest.mark.parametrize("when", ["recording", "processing"])
 async def test_app_shutdown_cancels_recording_and_processing(when):
-    kit = Kit()
-    await kit.__aenter__()
-    speech = kit.app.state.speech
-    hold_stt(kit)
-    await start(kit)
-    if when == "processing":
-        await stop(kit)
-        for _ in range(10):
-            await asyncio.sleep(0)
-        task = speech._processing
-    else:
-        task = speech._expiry
-    assert not task.done()
-    await kit.__aexit__(None, None, None)
+    """앱을 끄면 녹음 중인 녹음은 버리고 최대 녹음 시간·처리(STT 중) 태스크를 취소하며 턴 잠금을 놓는다."""
+    async with Kit() as kit:
+        speech = kit.app.state.speech
+        hold_stt(kit)
+        await start(kit)
+        if when == "processing":
+            await stop(kit)
+            for _ in range(10):  # 처리 태스크가 STT에서 기다릴 때까지
+                await asyncio.sleep(0)
+            task = speech._processing
+        else:
+            task = speech._expiry
+        assert not task.done()
     assert task.cancelled() and not kit.app.state.turn_lock.busy
     assert kit.parts.recorder.recording is None
