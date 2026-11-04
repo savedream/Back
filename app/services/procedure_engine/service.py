@@ -14,12 +14,12 @@ from app.services.manual_db import ManualDB
 from app.services.procedure_engine.actions import EngineResult
 from app.services.procedure_engine.clock import Clock
 from app.services.procedure_engine.context import Ctx
-from app.services.procedure_engine.core import new_session, recover, reduce
+from app.services.procedure_engine.core import new_session, recover, reduce, resume_session
 from app.services.procedure_engine.inputs import EngineInput, TickInput
 from app.services.procedure_engine.sequencer import Batch, Sequencer
 from app.services.procedure_engine.timers import deadlines
 from app.services.procedure_engine.view import session_changes
-from app.services.records import RecordSink
+from app.services.records import RecordSink, Snapshot
 from app.services.tts import Speaker
 
 log = logging.getLogger(__name__)
@@ -28,11 +28,16 @@ log = logging.getLogger(__name__)
 class EngineService:
     def __init__(self, db: ManualDB, clock: Clock, events: EventSink, speaker: Speaker, devices: DeviceController,
                  records: RecordSink, *, location: Callable[[], Location | None] = lambda: None,
-                 device_timeout_s: float = 2.0):
+                 device_timeout_s: float = 2.0, on_new_session: Callable[[SessionState], object] | None = None,
+                 session_ids: Callable[[], frozenset[str]] = frozenset,
+                 on_state: Callable[[SessionState], object] | None = None):
         self.db = db
         self.clock = clock
         self.events = events
         self._location = location  # GPS 스냅샷. GPS 모듈이 없으면 None
+        self._on_new_session = on_new_session  # 새 세션을 열면(start, session_reset) 부른다. 세션 표에 남기는 데 쓴다
+        self._session_ids = session_ids  # 이미 쓴 세션 ID(세션 표)
+        self._on_state = on_state  # 상태가 바뀌면 부른다. 상태 스냅샷(6-14)을 저장하는 데 쓴다
         self.state: SessionState | None = None
         self.sequencer = Sequencer(db, events, speaker, devices, records, self.submit, lambda: self.state, clock,
                                    device_timeout_s)
@@ -41,11 +46,23 @@ class EngineService:
         self._skipped: set[float] = set()  # 처리하지 못한 마감. 같은 마감으로 계속 깨어나지 않게 건너뛴다
         self._task: asyncio.Task | None = None
 
-    async def start(self) -> None:
-        """새 세션을 열고(T_WELCOME) 엔진 태스크를 띄운다. 준비가 끝난 뒤에 부른다."""
+    async def start(self, previous_session_id: str | None = None, snapshot: Snapshot | None = None) -> None:
+        """엔진 태스크를 띄운다. 준비가 끝난 뒤에 부른다. snapshot이 있으면 그 세션을 이어 가고(T_RESUME, 6-14),
+        없으면 새 세션을 연다(T_WELCOME, previous_session_id: 지난 세션)."""
         self.sequencer.start()
         ctx = self._ctx()
-        self._apply(None, new_session(ctx), ctx, speak=True)
+        result = None
+        if snapshot is not None:
+            # 끊긴 시간은 단조 시계 차이로 잰다. 같은 부팅이면 단조 시계가 이어지고, 벽시계는 GPS 동기화로 바뀔 수 있다
+            downtime = max(0.0, ctx.now - snapshot.saved_now)
+            try:
+                result = resume_session(snapshot.state, ctx, snapshot.saved_now, downtime)
+            except Exception:
+                log.exception("스냅샷에서 이어 가지 못해 새 세션을 연다: %s", snapshot.state.session_id)
+        if result is None:
+            self._apply(None, new_session(ctx, previous_session_id=previous_session_id), ctx, speak=True)
+        else:
+            self._apply(None, result, ctx, speak=True, resumed=True)
         self._task = asyncio.create_task(self._run())
         self._task.add_done_callback(_log_crash)
 
@@ -79,7 +96,8 @@ class EngineService:
         return result
 
     def _ctx(self) -> Ctx:
-        return Ctx(db=self.db, now=self.clock.now(), wall=self.clock.wall(), location=self._location())
+        return Ctx(db=self.db, now=self.clock.now(), wall=self.clock.wall(), location=self._location(),
+                   session_ids=self._session_ids())
 
     def _deadline(self) -> float | None:
         if self.state is None:
@@ -136,15 +154,25 @@ class EngineService:
 
     def _recover(self, inp: EngineInput) -> None:
         try:
-            self.state = recover(self.state, inp, self._ctx()).state
+            before = self.state
+            self.state = recover(before, inp, self._ctx()).state
+            self._state_changed(before)
         except Exception:
             log.exception("실패한 입력 뒤 정리도 실패: %s", inp.kind)
 
-    def _apply(self, before: SessionState | None, result: EngineResult, ctx: Ctx, speak: bool) -> Batch:
+    def _apply(self, before: SessionState | None, result: EngineResult, ctx: Ctx, speak: bool,
+               resumed: bool = False) -> Batch:
         self.state = result.state
         # 시퀀서에 먼저 넘긴다. 시퀀서는 이 함수가 끝나 차례가 와야 돌므로 이벤트 순서는 그대로이고,
         # 이벤트 발행이 실패해도 낭독이 빠지지 않는다(빠지면 남은 문장 때문에 마감이 걸리지 않는다)
         batch = self.sequencer.submit(result, speak)
+        opened = not resumed and result.state.session_id != (before.session_id if before else None)
+        if self._on_new_session is not None and opened:  # 이어 가는 세션은 이미 세션 표에 있다
+            try:
+                self._on_new_session(result.state)
+            except Exception:
+                log.exception("새 세션 알림 실패: %s", result.state.session_id)
+        self._state_changed(before)
         events = result.events
         for e in (e for e in events if e.type == "turn.result"):
             self._publish(e.type, result.turn_id, e.data)
@@ -154,6 +182,13 @@ class EngineService:
         for e in (e for e in events if e.type != "turn.result"):
             self._publish(e.type, result.turn_id, e.data)
         return batch
+
+    def _state_changed(self, before: SessionState | None) -> None:
+        if self._on_state is not None and self.state != before:
+            try:
+                self._on_state(self.state)
+            except Exception:
+                log.exception("상태 변화 알림 실패: %s", self.state.session_id)
 
     def _publish(self, type: str, turn_id: str | None, data: dict) -> None:
         try:

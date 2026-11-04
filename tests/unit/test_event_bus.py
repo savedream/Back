@@ -1,4 +1,6 @@
 """이벤트 버스: seq, 봉투, 구독자별 큐 (명세서 GET /api/events)."""
+import asyncio
+
 import pytest
 
 from app.services.events import EventBus, SubscriptionClosed
@@ -34,3 +36,25 @@ async def test_full_queue_drops_only_that_subscriber():
     with pytest.raises(SubscriptionClosed):
         await slow.get()
     assert [(await fast.get()).seq for _ in range(2)] == [1, 2]
+
+
+async def test_close_wakes_waiting_get():
+    sub = EventBus(FakeClock()).subscribe()
+    waiting = asyncio.create_task(sub.get())
+    await asyncio.sleep(0)  # get()이 큐에서 기다리는 자리까지 보낸다
+    sub.close()
+    with pytest.raises(SubscriptionClosed):
+        await asyncio.wait_for(waiting, 1)
+
+
+async def test_close_all_closes_every_subscription():
+    bus = EventBus(FakeClock())
+    first, second = bus.subscribe(), bus.subscribe(maxsize=1)
+    bus.close_all()
+    assert first.closed and second.closed
+    for sub in (first, second):
+        with pytest.raises(SubscriptionClosed):
+            await sub.get()
+    before = first.queue.qsize()
+    bus.publish("ui.notice", None, {})  # 닫힌 구독에는 더 쌓지 않는다
+    assert first.queue.qsize() == before

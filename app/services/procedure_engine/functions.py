@@ -31,7 +31,7 @@ def handle_function_call(run: Run, inp: FunctionCallInput) -> None:
         key = next(k for k, v in fc.observation.model_dump().items() if v != -1)
         old = run.s.observation[key]
         corrects = old.record_id if old else None
-    note = "기타 type 4, 처리 미정" if func == 5 and fc.args["type"] == 4 else None
+    note = "구급대 도착" if func == 5 and fc.args["type"] == 4 else None
     _record_user(run, inp, fc, corrects, note)
     run.event("turn.result", {"function_call": fc.model_dump(), "error_code": None})
     run.s.speech_active = False

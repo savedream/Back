@@ -11,6 +11,7 @@ def test_defaults():
     s = Settings(_env_file=None)
     assert s.host == "127.0.0.1"
     assert s.port == 8000
+    assert s.shutdown_timeout_s == 3
     assert s.vad_silence_s == 0.8
     assert s.max_utterance_s == 15
     assert s.model_timeout_s == 5

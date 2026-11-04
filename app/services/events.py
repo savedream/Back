@@ -1,4 +1,4 @@
-"""화면 이벤트 발행 (명세서 GET /api/events). 버스는 seq를 매기고 구독자별 큐로 나눠 준다. SSE 전송은 세션·기록 덩어리에서 붙인다."""
+"""화면 이벤트 발행 (명세서 GET /api/events). 버스는 seq를 매기고 구독자별 큐로 나눠 준다. SSE 전송은 app/api/events.py."""
 import asyncio
 from typing import Protocol
 
@@ -19,17 +19,24 @@ class SubscriptionClosed(Exception):
 class Subscription:
     def __init__(self, bus: "EventBus", maxsize: int):
         self._bus = bus
-        self.queue: asyncio.Queue[Event] = asyncio.Queue(maxsize)
+        self.queue: asyncio.Queue[Event | None] = asyncio.Queue(maxsize)  # None: close()가 기다리는 쪽을 깨우는 표시
         self.closed = False
 
     async def get(self) -> Event:
         if self.closed:
             raise SubscriptionClosed
-        return await self.queue.get()
+        event = await self.queue.get()
+        if event is None:
+            raise SubscriptionClosed
+        return event
 
     def close(self) -> None:
+        if self.closed:
+            return
         self.closed = True
         self._bus._subscriptions.discard(self)
+        if not self.queue.full():  # 가득 찼으면 기다리는 쪽이 없고, 다음 get()이 closed를 본다
+            self.queue.put_nowait(None)
 
 
 class EventBus:
@@ -57,3 +64,8 @@ class EventBus:
         sub = Subscription(self, maxsize)
         self._subscriptions.add(sub)
         return sub
+
+    def close_all(self) -> None:
+        """서버를 끌 때 열린 구독을 모두 닫는다(기다리던 SSE 스트림이 끝난다)."""
+        for sub in list(self._subscriptions):
+            sub.close()

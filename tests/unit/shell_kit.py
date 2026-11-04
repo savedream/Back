@@ -1,5 +1,6 @@
 """셸 시험 도구: 시험용 스피커·장치, 처리가 멈출 때까지 기다리기, 엔진 서비스를 띄운 ShellKit."""
 import asyncio
+import time
 
 from app.fakes.fake_model import FakeModel
 from app.schemas.device import DeviceCommand, Location
@@ -57,13 +58,16 @@ class ScriptDevices:
         return DeviceOutcome(status="success")
 
 
-async def until_idle(*parts, limit: int = 1000) -> None:
-    """엔진·낭독 실행기가 모두 쉴 때까지 이벤트 루프를 돌린다. 남은 마감 시각은 기다리지 않는다."""
-    for _ in range(limit):
-        if all(p.idle for p in parts):
-            return
+async def until_idle(*parts, timeout: float = 2.0) -> None:
+    """엔진·낭독 실행기가 모두 쉴 때까지 이벤트 루프를 돌린다. 남은 마감 시각은 기다리지 않는다.
+
+    기록 쓰기 스레드처럼 루프 밖에서 끝나는 일이 있어 돈 횟수가 아니라 실제 시간(timeout)으로 끊는다.
+    """
+    end = time.monotonic() + timeout
+    while not all(p.idle for p in parts):
+        if time.monotonic() > end:
+            raise AssertionError("처리가 끝나지 않음")
         await asyncio.sleep(0)
-    raise AssertionError("처리가 끝나지 않음")
 
 
 async def until_speaking(speaker: ScriptSpeaker, already: int = 0, limit: int = 1000) -> None:

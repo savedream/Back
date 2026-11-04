@@ -16,10 +16,16 @@ class Settings(BaseSettings):
     port: int = 8000
     # 기본 Swagger(/docs)는 CDN 스크립트를 불러오므로 개발 중에만 켠다
     enable_docs: bool = False
+    # 서버를 끌 때 열린 연결이 끝나기를 기다리는 최대 시간(초, uvicorn timeout_graceful_shutdown). TODO(미정: 임시값)
+    shutdown_timeout_s: float = 3
 
     # 경로
     manual_db_path: Path = BACKEND_DIR / "data" / "manual_db.json"
     records_db_path: Path = BACKEND_DIR / "records.db"
+    # 지금 부팅의 ID(Linux). 상태 스냅샷(6-14)이 같은 부팅의 것인지 가린다. 파일이 없으면 스냅샷에서 이어 가지 않는다
+    boot_id_path: Path = Path("/proc/sys/kernel/random/boot_id")
+    # 같은 부팅에서 백엔드만 다시 떴으면 상태 스냅샷에서 이어 간다(6-14). 끄면 늘 새 세션
+    resume_from_snapshot: bool = True
 
     # 버전 (GET /health). 매뉴얼 DB 버전은 적재한 DB의 meta.version에서 읽는다
     app_version: str = "1.3.0"
@@ -31,6 +37,13 @@ class Settings(BaseSettings):
     model_timeout_s: float = 5
     post_tts_guard_ms: int = 300
     device_timeout_s: float = 2
+
+    # SSE(GET /api/events)에서 이벤트가 없을 때 ping 주석을 보내는 간격(초)
+    sse_ping_s: float = 15
+
+    # 기록 저장 재시도 간격(엔진 시계 기준, 시작값에서 두 배씩, 최대값까지). TODO(미정: 임시값)
+    record_retry_base_s: float = 1
+    record_retry_max_s: float = 60
 
     # 모델 프롬프트 앞에 <|im_start|>를 붙일지. TODO(미정: 모델 팀 확인)
     prompt_prefix_im_start: bool = False
