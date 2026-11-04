@@ -45,6 +45,20 @@ async def test_location_without_gps_module_is_503(kit):
     assert res.json() == {"ok": False, "error": {"code": "DEVICE_UNAVAILABLE", "message": "GPS가 연결되지 않았습니다"}}
 
 
+async def test_location_updated_event(kit):
+    """위치·수신 상태가 바뀌면 location.updated로 GET /api/location과 같은 Location을 보낸다."""
+    kit.parts.gps.lose_fix()
+    await kit.advance(60)
+    kit.parts.gps.set_fix(37.5, 127.0)
+    await kit.settle()
+    updates = [e for e in kit.events if e.type == "location.updated"]
+    assert [e.turn_id for e in updates] == [None, None]  # 연결·상태 이벤트는 턴이 없다
+    lost, found = (e.data for e in updates)
+    assert list(lost) == LOCATION_KEYS and lost["fix"] is False and lost["last_known"]["age_s"] == 0
+    assert (found["fix"], found["lat"], found["lon"]) == (True, 37.5, 127.0)
+    assert found == await get_location(kit)
+
+
 def test_location_responds_before_ready(client):
     """조회 API라 준비 전에도 200. 503 NOT_READY 없음."""
     assert client.get("/api/health").json()["data"]["ready"] is False
