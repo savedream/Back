@@ -8,11 +8,12 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from app.api import devices, events, location, manuals, records, session, system, utterances
+from app.api import devices, events, location, manuals, records, session, speech, system, utterances
 from app.common.handlers import install_error_handlers
 from app.config import Settings, get_settings
 from app.core.parts import build_parts
 from app.core.readiness import Component, Readiness
+from app.core.speech import SpeechCapture
 from app.core.turn import TurnLock
 from app.services.manual_db import load_manual_db
 from app.services.procedure_engine.clock import Clock, SystemClock
@@ -30,6 +31,8 @@ def create_app(settings: Settings | None = None, *, clock: Clock | None = None) 
         readiness = app.state.readiness
         readiness.mark_ready(Component.MANUAL_DB)
         parts = app.state.parts = build_parts(settings, app.state.manual_db, clock)
+        speech_capture = app.state.speech = SpeechCapture(parts, app.state.turn_lock, settings.max_utterance_s,
+                                                          settings.model_timeout_s)
         parts.records.start()
         if settings.fake_auto_ready:
             for component in (Component.VAD, Component.STT, Component.TTS, Component.LLM, Component.LLM_WARMUP):
@@ -40,6 +43,7 @@ def create_app(settings: Settings | None = None, *, clock: Clock | None = None) 
             await parts.start_engine()
         yield
         parts.events.close_all()  # 남은 구독 정리(python -m app.run이면 연결을 기다리기 전에 이미 닫음)
+        await speech_capture.close()  # 녹음·처리 중인 말하기 버튼 턴을 멈춘 뒤 엔진을 멈춘다
         await parts.engine.stop()
         await parts.records.close()  # 엔진을 멈춘 뒤 남은 기록 쓰기를 마친다
 
@@ -60,6 +64,7 @@ def create_app(settings: Settings | None = None, *, clock: Clock | None = None) 
     api.include_router(system.router)
     api.include_router(events.router)
     api.include_router(utterances.router)
+    api.include_router(speech.router)
     api.include_router(session.router)
     api.include_router(records.router)
     api.include_router(devices.router)

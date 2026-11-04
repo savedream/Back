@@ -71,8 +71,9 @@ class Kit:
         return res.json()["data"]
 
     async def settle(self) -> None:
-        """엔진 입력 큐가 비고 낭독 실행기가 쉬고 기다리는 되먹임이 없을 때까지. 남은 마감 시각은 기다리지 않는다."""
-        await until_idle(self.parts.engine, self.parts.engine.sequencer)
+        """엔진 입력 큐가 비고 낭독 실행기가 쉬고 기다리는 되먹임이 없고 말하기 버튼 턴 처리도 없을 때까지.
+        남은 마감 시각(최대 녹음 시간 포함)은 기다리지 않는다."""
+        await until_idle(self.parts.engine, self.parts.engine.sequencer, self.app.state.speech)
         self.drain()
 
     def drain(self) -> None:
