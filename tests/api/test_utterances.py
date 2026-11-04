@@ -195,3 +195,17 @@ async def test_turn_takes_t0_and_earlier_latency(kit):
     latency = next(e for e in kit.events if e.type == "turn.latency")
     assert latency.turn_id == "t_voice" and latency.data["stt"] == 7 and latency.data["vad_tail"] is None
     assert latency.data["e2e"] >= 1000
+
+
+async def test_voice_turn_goes_through_stt_then_same_path(kit):
+    """음성 턴: STT 뒤 문장 턴과 같은 경로(trigger button, speech.final). 빈 문장이면 모델 없이 인식 실패(STT_EMPTY)."""
+    recorder, stt = kit.parts.recorder, kit.parts.stt
+    stt.queue.extend(["", "등산하다 넘어졌는데 다리를 움직이기 어려워요"])
+    for turn_id in ("t_v1", "t_v2"):
+        recorder.start(turn_id)
+        await turn_module.run_voice_turn(kit.parts, 5, recorder.stop(), time.perf_counter())
+        await kit.settle()
+    assert kit.model.calls == 1
+    assert [(e.type, e.turn_id) for e in kit.events if e.type in ("ui.notice", "speech.final")] == [
+        ("ui.notice", "t_v1"), ("speech.final", "t_v2")]
+    assert kit.state.step_id == "EM03-01"

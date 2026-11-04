@@ -12,13 +12,17 @@ from app.schemas.device import DeviceCommand, Location
 from app.schemas.function_call import FunctionCall
 
 
+# 사용자 턴의 출처: 텍스트 턴(/api/utterances)·말하기 버튼·상시 듣기(VAD)
+Trigger = Literal["text", "button", "vad"]
+
+
 class UserTurn(BaseModel):
     turn_id: str
     epoch: int
     step_id: str | None
     text: str  # STT 원문(텍스트 턴이면 넣은 문장)
     normalized: str
-    trigger: Literal["text", "button", "vad"] = "text"  # 텍스트 턴(/api/utterances)·말하기 버튼·상시 듣기
+    trigger: Trigger = "text"  # text가 아니면(음성 턴) 엔진이 알아들은 문장(speech.final)을 낸다
 
 
 class FunctionCallInput(UserTurn):
