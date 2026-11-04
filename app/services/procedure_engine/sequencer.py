@@ -1,6 +1,7 @@
 """낭독 실행기 (계획 3-3·3-4): 엔진 결과의 actions를 순서대로 실행하고 되먹임을 엔진에 넣는다.
 
 say는 끝까지 읽은 뒤 다음으로 넘어가고, device·record는 시작만 하고 넘어간다(결과는 되먹임으로 돌아온다).
+소리 내 읽는 say는 읽기 직전에 시작 되먹임(started)을 넣고 엔진이 처리할 때까지 기다린다(소리 기능 멈춤, held_by).
 replace 결과가 오면 남은 say는 읽지 않고 끊김(cut)으로 돌려주고, 남은 device·record는 그대로 실행한다.
 """
 import asyncio
@@ -119,6 +120,8 @@ class Sequencer:
             item.cut = True
         if self._playing is not None:
             self._playing.cancel()
+        elif self._current is not None and isinstance(self._current.action, SayAction):
+            self._current.cut = True  # 시작 되먹임을 기다리는 중이면 읽지 않는다
 
     async def _run(self) -> None:
         while True:
@@ -160,6 +163,13 @@ class Sequencer:
     async def _say(self, item: _Item) -> str:
         action, u = item.action, item.action.utterance
         turn_id = item.batch.turn_id
+        if not item.silent:
+            try:
+                await self._feed(PlaybackInput(action_id=action.action_id, event="started"))
+            except Exception:
+                log.exception("낭독 시작 되먹임 실패, 그대로 읽음: %s", u.text)
+            if item.cut:
+                return "cut"  # 기다리는 사이 replace로 버려짐. 화면에도 내지 않는다
         if u.source == "step" and u.step_id != self._shown_step:
             step = self._db.steps_by_id[u.step_id]
             self._events.publish("guide.step", turn_id, {k: step[k] for k in _GUIDE_STEP_FIELDS})
