@@ -46,7 +46,8 @@ Action = Annotated[SayAction | DeviceAction | RecordAction, Field(discriminator=
 class EngineEvent(BaseModel):
     """화면에 알릴 일. 봉투(seq, at)는 이벤트 버스가 씌운다."""
 
-    type: Literal["turn.result", "session.updated", "alert.started", "alert.ended", "ui.notice", "device.state"]
+    type: Literal["turn.result", "session.updated", "alert.started", "alert.ended", "ui.notice", "device.state",
+                  "status.changed", "speech.final"]
     data: dict
 
 

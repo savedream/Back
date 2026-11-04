@@ -102,14 +102,11 @@ class VolumeOut(BaseModel):
 
 
 async def _volume(request: Request, up: bool):
-    parts = request.app.state.parts
-    _require_speaker(parts.engine.state)
+    _require_speaker(request.app.state.parts.engine.state)
     pressed = await _press(request, 5, 1 if up else 2)
     state = pressed.result.state
     speaker = SpeakerView(connected=state.devices["rescue_signal"].connected, volume=state.volume)
-    already = not _commanded(pressed.result, 5)  # 끝값(10, 100)이면 바꾸지 않는다
-    if not already:
-        parts.events.publish("status.changed", pressed.turn_id, {"speaker": {"volume": state.volume}})
+    already = not _commanded(pressed.result, 5)  # 끝값(10, 100)이면 바꾸지 않는다. 바뀐 음량은 엔진이 status.changed로 낸다
     return ok(VolumeOut(turn_id=pressed.turn_id, result=_button_result(pressed, already), speaker=speaker))
 
 

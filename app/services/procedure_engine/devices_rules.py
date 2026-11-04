@@ -147,6 +147,7 @@ def _volume(run: Run, typ: int, source: str) -> None:
     run.say_template("T_DEV_VOL_UP" if typ == 1 else "T_DEV_VOL_DOWN")
     if run.s.volume != before:
         run.device(5, typ, source)
+        run.event("status.changed", {"speaker": {"volume": run.s.volume}})  # GET /api/devices의 speaker 부분
     run.record(DeviceResultRecord(**run.record_base(), object=5, type=typ, source=source,
                                   result="success" if run.s.volume != before else "already",
                                   detail={"volume": run.s.volume}))

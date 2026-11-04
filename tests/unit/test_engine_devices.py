@@ -211,3 +211,13 @@ def test_off_while_queued_cancels_the_on_request(kit):
     assert [(r.object, r.type, r.source, r.result) for r in kit.records[mark:] if r.kind == "device_result"] == [
         (4, 1, "voice", "cancelled")]
     assert [a.action_id for a in kit.device_actions if a.command.object == 4] == [on.action_id]  # 끄기 명령 없음
+
+
+def test_volume_status_changed_only_when_volume_changes(kit):
+    """음량 status.changed는 엔진이 낸다(AC-E5). 끝값(100)에서 그대로면 내지 않는다."""
+    kit.model.add("소리 키워 줘", "<maum_4>(object=5, type=1)<maum_end>")
+    at_s1b(kit)
+    for _ in range(4):
+        kit.say("소리 키워 줘")
+    assert kit.state.volume == 100
+    assert [e.data for e in kit.events if e.type == "status.changed"] == [{"speaker": {"volume": v}} for v in (80, 90, 100)]

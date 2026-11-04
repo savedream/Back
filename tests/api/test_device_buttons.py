@@ -202,7 +202,9 @@ async def test_volume_shape_and_result(kit, path, volume, template):
     assert kit.state.volume == volume
     assert [c.object for c in kit.parts.devices.commands] == [5]
     assert templates_since(kit, mark) == [template]
-    assert volume_events(kit) == [{"speaker": {"volume": volume}}]
+    # 엔진이 한 번만 낸다(버튼 API에서 따로 내지 않음, AC-E5)
+    assert [(e.turn_id, e.data) for e in kit.events if e.type == "status.changed" and "speaker" in e.data] == [
+        (data["turn_id"], {"speaker": {"volume": volume}})]
 
 
 @pytest.mark.parametrize(("path", "steps", "end"), [("/api/volume/up", 3, 100), ("/api/volume/down", 6, 10)])
@@ -217,6 +219,15 @@ async def test_volume_already_at_end(kit, path, steps, end):
     assert data["result"] == "already" and data["speaker"]["volume"] == end
     await kit.settle()
     assert len(kit.parts.devices.commands) == sent and len(volume_events(kit)) == changed
+
+
+@pytest.mark.parametrize(("text", "raw", "volume"), [("소리 키워 줘", "<maum_4>(object=5, type=1)<maum_end>", 80),
+                                                   ("소리 줄여 줘", "<maum_4>(object=5, type=2)<maum_end>", 60)])
+async def test_voice_volume_sends_status_changed_once(kit, text, raw, volume):
+    """음성으로 바꿔도 버튼과 같이 엔진이 status.changed를 한 번 낸다(AC-E5)."""
+    kit.model.add(text, raw)
+    await kit.say(text)
+    assert kit.state.volume == volume and volume_events(kit) == [{"speaker": {"volume": volume}}]
 
 
 async def test_volume_queued_while_reading(kit):
