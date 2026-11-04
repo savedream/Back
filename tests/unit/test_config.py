@@ -14,6 +14,7 @@ def test_defaults():
     assert s.shutdown_timeout_s == 3
     assert s.vad_silence_s == 0.8
     assert s.max_utterance_s == 15
+    assert s.fake_stt_text == "등산하다 넘어졌는데 다리를 움직이기 어려워요"  # 가짜 모델 표 첫 행(S1a)
     assert s.model_timeout_s == 5
     assert s.post_tts_guard_ms == 300
     assert s.device_timeout_s == 2
