@@ -1,4 +1,4 @@
-"""부품 조립: 지금은 가짜 부품(모델·기기·GPS·스피커·녹음기·STT)으로 엔진을 꾸린다. 실제 부품은 키트 단계에서 같은 자리(Protocol)에 끼운다."""
+"""부품 조립: 지금은 가짜 부품(모델·기기·GPS·스피커·녹음기·STT·종료 훅·배터리)으로 엔진을 꾸린다. 실제 부품은 키트 단계에서 같은 자리(Protocol)에 끼운다."""
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -8,6 +8,7 @@ from app.fakes.fake_devices import FakeDevices
 from app.fakes.fake_gps import FakeGps
 from app.fakes.fake_model import FakeModel
 from app.fakes.fake_speaker import FakeSpeaker
+from app.fakes.fake_system import FakeBattery, FakeShutdown
 from app.schemas.record import Record
 from app.services.events import EventBus
 from app.services.manual_db import ManualDB
@@ -31,6 +32,8 @@ class Parts:
     engine: EngineService
     recorder: FakeRecorder
     stt: FakeStt
+    shutdown: FakeShutdown
+    battery: FakeBattery
     boot_id: str | None = None
     resume_from_snapshot: bool = False
 
@@ -83,5 +86,7 @@ def build_parts(settings: Settings, db: ManualDB, clock: Clock) -> Parts:
     gps.listeners.append(lambda loc: events.publish("location.updated", None, loc.model_dump()))
     # GPS 재시도 중 위치가 잡히면 엔진이 T_GPS_OK를 읽는다(6-11)
     gps.listeners.append(lambda loc: engine.post(LocationUpdateInput(location=loc)))
+    # 가짜 종료 훅은 꺼짐 요청만 표시하고 엔진 동결을 풀어 서버를 계속 쓸 수 있게 한다(화면 개발용)
     return Parts(clock, events, records, devices, gps, speaker, FakeModel(), engine, FakeRecorder(),
-                 FakeStt(settings.fake_stt_text), boot_id, settings.resume_from_snapshot)
+                 FakeStt(settings.fake_stt_text), FakeShutdown(engine.unfreeze), FakeBattery(), boot_id,
+                 settings.resume_from_snapshot)
