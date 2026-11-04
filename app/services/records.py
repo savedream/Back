@@ -145,6 +145,10 @@ class SqliteRecordStore:
         self._jobs.put(None)
         await asyncio.to_thread(self._thread.join)
 
+    async def flush(self) -> None:
+        """앞서 넣은 쓰기(기록·세션·스냅샷)가 모두 끝나 그 결과(저장·미저장)가 메모리에 반영될 때까지 기다린다(키트 끄기)."""
+        await asyncio.gather(self._enqueue(lambda conn: None), return_exceptions=True)
+
     def _read_previous(self) -> None:
         """세션 표의 세션 ID들과 마지막 상태 스냅샷을 읽는다. 읽지 못해도 서버는 시작한다(새 세션)."""
         try:
