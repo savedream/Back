@@ -153,6 +153,8 @@ class Sequencer:
                     result = "text_only"
             await self._feed(PlaybackInput(action_id=action.action_id, event="finished", result=result))
         elif isinstance(action, DeviceAction):
+            if action.command.object in (2, 4) and action.action_id not in self._state().pending_devices:
+                return  # 대기 중에 끄기로 취소된 켜기(6-10). 엔진이 이미 요청 전 값으로 되돌렸다
             # 바로 앞 문장이 끝난 지금 명령을 내고(다음 문장보다 먼저), 응답은 기다리지 않는다
             call = asyncio.ensure_future(self._devices.execute(action.command))
             self._track(call)
