@@ -25,6 +25,22 @@ class ModelRunner(Protocol):
         ...
 
 
+class LoadedModel(ModelRunner, Protocol):
+    """실제 모델 실행기(PC용 hf_model, 키트용). 서버를 켠 뒤 적재·예열하고 끌 때 내려놓는다(app/main.py)."""
+
+    async def load(self) -> None:
+        """모델 적재. 끝나면 준비 상태의 LLM을 켠다."""
+        ...
+
+    async def warm_up(self) -> None:
+        """예열 추론 1회(명세 ④ 예열). 끝나면 준비 상태의 LLM_WARMUP을 켠다."""
+        ...
+
+    async def close(self) -> None:
+        """모델을 내려놓는다. 진행 중인 추론이 끝난 뒤에 돈다."""
+        ...
+
+
 def build_prompt(text: str) -> str:
     """정규화한 문장을 학습 때의 프롬프트에 넣는다(채팅 템플릿을 씌우지 않음)."""
     return PROMPT.format(text=text)

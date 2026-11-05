@@ -78,7 +78,7 @@ def create_app(settings: Settings | None = None, *, clock: Clock | None = None) 
         await speech_capture.close()  # 녹음·처리 중인 말하기 버튼 턴을 멈춘 뒤 엔진을 멈춘다
         await parts.engine.stop()
         await parts.records.close()  # 엔진을 멈춘 뒤 남은 기록 쓰기를 마친다
-        if model_loading is not None:
+        if not settings.fake_model:
             await parts.model.close()  # 실제 모델은 턴이 다 끝난 뒤 내려놓아 메모리를 돌려준다
 
     app = FastAPI(

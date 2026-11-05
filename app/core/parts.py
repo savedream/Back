@@ -13,7 +13,7 @@ from app.fakes.fake_system import FakeBattery, FakeShutdown
 from app.schemas.record import Record
 from app.services.events import EventBus
 from app.services.manual_db import ManualDB
-from app.services.model_runner import ModelRunner
+from app.services.model_runner import LoadedModel, ModelRunner
 from app.services.procedure_engine.clock import Clock
 from app.services.procedure_engine.inputs import LocationUpdateInput
 from app.services.procedure_engine.service import EngineService
@@ -73,7 +73,7 @@ def read_boot_id(path: Path) -> str | None:
         return None
 
 
-def _real_model(settings: Settings) -> ModelRunner:
+def _real_model(settings: Settings) -> LoadedModel:
     """PC용 실제 모델 실행기. 적재·예열은 서버를 켠 뒤 백그라운드로 한다(app/main.py)."""
     if settings.model_dir is None or not settings.model_dir.is_dir():
         raise RuntimeError(f"fake_model=false면 실제 모델 폴더가 필요함(SALYEO_MODEL_DIR): {settings.model_dir}")
