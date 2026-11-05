@@ -100,6 +100,41 @@ async def test_real_model_loads_after_start_then_engine_welcomes(monkeypatch, tm
     assert model.closed  # 끌 때 모델을 내려놓는다
 
 
+async def test_ready_turns_on_only_after_engine_started(monkeypatch, tmp_path):
+    """엔진 시작이 양보하는 동안(스냅샷 이어가기 등) 준비 완료로 보이면 요청이 엔진 없이 들어와 500이 된다."""
+    model = LoadingModel()
+    app = real_model_app(monkeypatch, tmp_path, model)
+    async with app.router.lifespan_context(app):
+        readiness, parts = app.state.readiness, app.state.parts
+        seen, start = [], parts.start_engine
+
+        async def start_engine():
+            seen.append(readiness.ready)
+            await start()
+
+        parts.start_engine = start_engine
+        model.loaded.set()
+        await app.state.model_loading
+        assert seen == [False] and readiness.ready
+
+
+async def test_engine_start_failure_stays_not_ready(monkeypatch, tmp_path):
+    """적재 뒤 엔진 시작이 실패해도 준비 전(503)으로 남고, 서버를 끌 때 기록 저장 마무리를 건너뛰지 않는다."""
+    model = LoadingModel()
+    app = real_model_app(monkeypatch, tmp_path, model)
+    async with app.router.lifespan_context(app):
+        parts = app.state.parts
+
+        async def broken():
+            raise RuntimeError("엔진 시작 실패")
+
+        parts.start_engine = broken
+        model.loaded.set()
+        await app.state.model_loading
+        assert not app.state.readiness.ready
+    assert model.closed
+
+
 async def test_real_model_load_failure_stays_not_ready(monkeypatch, tmp_path):
     model = LoadingModel(fail=True)
     app = real_model_app(monkeypatch, tmp_path, model)

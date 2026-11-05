@@ -25,18 +25,17 @@ log = logging.getLogger(__name__)
 
 
 async def _prepare_model(parts: Parts, readiness: Readiness) -> None:
-    """실제 모델 적재 → LLM, 예열 추론 1회 → LLM_WARMUP(명세 ④ 예열). 다른 부품도 준비됐으면 엔진을 시작한다.
-    적재·예열이 실패하면 로그만 남기고 준비 전(503 NOT_READY)으로 둔다."""
+    """실제 모델 적재 → LLM, 예열 추론 1회 → LLM_WARMUP(명세 ④ 예열). 다른 부품도 준비됐으면 예열 표시 전에 엔진을
+    시작한다(ready: true가 되는 순간 엔진이 있어야 하므로). 하나라도 실패하면 로그만 남기고 준비 전(503 NOT_READY)으로 둔다."""
     try:
         await parts.model.load()
         readiness.mark_ready(Component.LLM)
         await parts.model.warm_up()
+        if all(readiness.is_ready(c) for c in Component if c is not Component.LLM_WARMUP):
+            await parts.start_engine()
         readiness.mark_ready(Component.LLM_WARMUP)
     except Exception:
-        log.exception("실제 모델 적재·예열 실패")
-        return
-    if readiness.ready:
-        await parts.start_engine()
+        log.exception("실제 모델 적재·예열 또는 엔진 시작 실패")
 
 
 def create_app(settings: Settings | None = None, *, clock: Clock | None = None) -> FastAPI:
