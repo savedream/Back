@@ -1,0 +1,22 @@
+.git/
+.venv/
+.omc/
+.pytest_cache/
+**/__pycache__/
+*.pyc
+*.egg-info/
+
+# 실행 중 생기는 파일
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+logs/
+
+# 환경 변수(내 컴퓨터 설정을 이미지에 넣지 않는다)
+.env
+.env.*
+
+.DS_Store
+tests/
+tools/
