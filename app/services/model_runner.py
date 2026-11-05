@@ -7,6 +7,7 @@
 import asyncio
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
 from typing import Protocol, TypeVar
 
 T = TypeVar("T")
@@ -15,7 +16,8 @@ T = TypeVar("T")
 PROMPT = ("Below is the query from the users, please choose the correct function and generate the parameters to call "
           "the function. Query: {text} Response:")
 MAX_NEW_TOKENS = 64  # 명세 ④ 생성 설정
-EOT_TEXT = "<|eot_id|>"  # <maum_end> 말고 생성을 멈추는 다른 토큰(generation_config의 eos). 출력에서는 지운다
+MAUM_END = "<maum_end>"  # 생성을 멈추는 토큰(명세 ④). 출력에 남긴다
+EOT_TEXT = "<|eot_id|>"  # <maum_end> 말고 생성을 멈추는 다른 토큰(토크나이저의 eos). 출력에서는 지운다
 WARMUP_TEXT = "다시 말해 줘"  # 기동 때 예열 추론에 넣는 문장(결과는 쓰지 않음)
 
 
@@ -66,5 +68,11 @@ class OneAtATime:
         try:
             return await asyncio.shield(future)
         except asyncio.CancelledError:
-            await asyncio.wait([future])
+            while not future.done():  # 기다리는 중에 취소가 또 와도(서버 끄기 등) 네이티브 호출이 끝날 때까지 기다린다
+                with suppress(asyncio.CancelledError):
+                    await asyncio.wait([future])
             raise
+
+    def close(self) -> None:
+        """전용 스레드를 정리한다. 진행 중인 호출은 끝까지 돌고, 그 뒤의 호출은 RuntimeError(턴에서는 MODEL_FAILED)."""
+        self._pool.shutdown(wait=False)

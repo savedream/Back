@@ -47,3 +47,33 @@ async def test_timeout_returns_only_after_native_call_ends():
     with pytest.raises(asyncio.TimeoutError):
         await asyncio.wait_for(worker.call(infer), timeout=0.01)
     assert finished.is_set()
+
+
+async def test_second_cancel_still_waits_for_native_call():
+    """기다리는 중에 취소가 또 와도(시간 초과 뒤 서버 끄기 등) 네이티브 호출이 끝나기 전에는 돌아오지 않는다."""
+    worker, release, finished = OneAtATime(), threading.Event(), threading.Event()
+
+    def infer():
+        release.wait(2)
+        finished.set()
+
+    task = asyncio.create_task(worker.call(infer))
+    await asyncio.sleep(0.01)
+    task.cancel()
+    await asyncio.sleep(0.01)
+    task.cancel()
+    await asyncio.sleep(0.01)
+    assert not task.done()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert finished.is_set()
+
+
+async def test_calls_after_close_fail():
+    """끈 뒤의 호출은 RuntimeError라 턴에서는 MODEL_FAILED가 된다."""
+    worker = OneAtATime()
+    assert await worker.call(lambda: 1) == 1
+    worker.close()
+    with pytest.raises(RuntimeError):
+        await worker.call(lambda: 2)
