@@ -2,19 +2,22 @@
 """실제 모델 확인: 가짜 모델 표(시나리오 시험 문장)를 실제 모델에 넣어 출력이 표와 같은지, 파서를 통과하는지, 얼마나 걸리는지 본다.
 
 사용: python tools/check_model.py [모델 폴더]
-기본값: SALYEO_MODEL_DIR, 없으면 저장소 옆 models/maum. 필요: pip install -e '.[model]'
+기본값: 서버와 같은 설정의 model_dir(SALYEO_MODEL_DIR·.env), 없으면 저장소 옆 models/maum. 필요: pip install -e '.[model]'
 표와 다른 출력은 보고만 한다(표는 시험용으로 사람이 적은 기대값). 파서를 통과하지 못한 출력이 하나라도 있으면 종료 코드 1.
 """
-import asyncio, os, sys, time
+import asyncio, sys, time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from app.config import Settings  # noqa: E402
 from app.fakes.fake_model import load_default_table  # noqa: E402
 from app.services.hf_model import HfModelRunner  # noqa: E402
 from app.services.output_parser import ModelOutputError, parse  # noqa: E402
 
-model_dir = Path(sys.argv[1] if len(sys.argv) > 1 else os.environ.get('SALYEO_MODEL_DIR', ROOT.parent / 'models' / 'maum'))
+model_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else Settings().model_dir or ROOT.parent / 'models' / 'maum'
+if not model_dir.is_dir():
+    sys.exit(f'모델 폴더가 없음: {model_dir}')
 
 
 async def main() -> int:
