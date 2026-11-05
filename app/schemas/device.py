@@ -41,6 +41,15 @@ class DeviceState(BaseModel):
     detail: dict = {}
 
 
+class PendingStart(BaseModel):
+    """확인 문장(T_DEV_TIMER_START·RESUME) 뒤로 미룬 타이머 시작·재개와 그 요청. 시작할 때 기록(device_result)에 쓴다."""
+
+    action_id: str  # 확인 문장 say 액션
+    source: Literal["voice", "button"]
+    turn_id: str | None
+    step_id: str | None = None  # 기록의 step_id(엔진 출처일 때만 단계라 음성·버튼 요청은 None)
+
+
 class TimerState(BaseModel):
     """경과 시간 타이머(하나). 시간은 엔진 시계(단조 증가 초) 기준이고 화면용 elapsed_s·started_at은 API에서 만든다."""
 
@@ -48,6 +57,8 @@ class TimerState(BaseModel):
     accumulated_s: float = 0.0  # 일시정지 전까지 잰 시간
     running_since: float | None = None  # running이면 이번 측정 구간 시작 시각
     started_at: str | None = None  # 처음 시작한 벽시계 시각(ISO 8601)
+    # 엔진 내부 칸(화면 보기·timer.tick에서 뺌): 음성·버튼 시작·재개는 확인 문장이 끝나기를 기다린다(AC-E1)
+    starts_after: PendingStart | None = None
 
     def elapsed_s(self, now: float) -> int:
         running = now - self.running_since if self.running_since is not None else 0.0

@@ -3,6 +3,7 @@ import asyncio
 
 import pytest
 
+from app.services.procedure_engine.inputs import DeviceResultInput
 from tests.scenario.kit import Kit
 from tests.unit.shell_kit import ScriptSpeaker, until_speaking
 
@@ -89,14 +90,88 @@ async def test_rescue_signal_queued_while_reading(kit):
     speaker = await reading_guidance(kit)
     data = await press(kit, "/api/rescue-signal/on")
     assert data["result"] == "queued"
+    assert data["device"]["queued"] == {"type": 1, "source": "button"}  # 6-10 queued(AC-E3)
     assert kit.parts.devices.on == set()  # 아직 켜지 않았다
     speaker.release()
     await kit.settle()
-    assert kit.parts.devices.on == {4}
+    assert kit.parts.devices.on == {4} and kit.state.devices["rescue_signal"].queued is None
     said = [u.template_id or u.step_id for u in speaker.spoken]
     question = kit.state.step_id
     assert said.index("T_DEV_SOS_ON") > said.index(question)  # 읽던 질문 뒤에 확인 문장
     assert said[-2:] == ["T_DEV_SOS_ON", question]  # 동작 뒤 질문 다시(6-10)
+
+
+async def test_rescue_signal_off_cancels_queued_on(kit):
+    """대기 중인 켜기에 끄기를 누르면 대기를 취소한다(6-10). 장치는 켜기·끄기 명령을 받지 않고, 확인 문장은 둘 다 읽는다."""
+    speaker = await reading_guidance(kit)
+    before, last_off = kit.state.devices["rescue_signal"].model_copy(), kit.state.last_off_device
+    await press(kit, "/api/rescue-signal/on")
+    data = await press(kit, "/api/rescue-signal/off")
+    assert data["device"]["queued"] is None and data["device"]["status"] == before.status
+    rescue = kit.state.devices["rescue_signal"]
+    assert [c for c in kit.state.pending_devices.values() if c["object"] == 4] == []
+    assert (rescue.want, rescue.status, kit.state.last_off_device) == (before.want, before.status, last_off)
+    speaker.release()
+    await kit.settle()
+    assert [c for c in kit.parts.devices.commands if c.object == 4] == [] and kit.parts.devices.on == set()
+    cancelled = [(r.object, r.type, r.source) for r in kit.records
+                 if r.kind == "device_result" and r.result == "cancelled"]
+    assert cancelled == [(4, 1, "button")]
+    said = [u.template_id for u in speaker.spoken]
+    assert said.index("T_DEV_SOS_ON") < said.index("T_DEV_SOS_OFF")  # 이미 큐에 있던 켜기 확인 문장도 읽는다(기본값 2)
+
+
+async def until_commanded(kit: Kit, obj: int, typ: int) -> None:
+    for _ in range(1000):
+        if any((c.object, c.type) == (obj, typ) for c in kit.parts.devices.commands):
+            return
+        await asyncio.sleep(0)
+    raise AssertionError("장치 명령이 나가지 않음")
+
+
+async def held_rescue_signal(kit: Kit) -> ScriptSpeaker:
+    """구조신호를 켜 두고 안내 문장을 읽는 중(held_by tts, 음소거 관문 닫힘)."""
+    await press(kit, "/api/rescue-signal/on")
+    await kit.settle()
+    devices = kit.parts.devices
+    assert devices.on == {4} and devices.held == set()
+    speaker = await reading_guidance(kit)
+    assert kit.state.devices["rescue_signal"].held_by == "tts" and devices.held == {4}
+    return speaker
+
+
+@pytest.mark.parametrize("failure", ["failed", "timeout"])
+async def test_rescue_signal_stays_muted_when_off_fails_while_held(kit, failure):
+    """멈춘 동안 끄기 요청이 오고 장치가 실패하면 다시 울리지 않는다(⑦). 다음 성공으로 꺼짐이 확정되면 관문을 연다."""
+    devices = kit.parts.devices
+    speaker = await held_rescue_signal(kit)
+    devices.fail_next(failure)
+    await press(kit, "/api/rescue-signal/off")
+    mark = len(devices.holds)
+    speaker.release()
+    await until_commanded(kit, 4, 2)
+    await kit.advance(2)  # 장치 응답 제한
+    rescue = kit.state.devices["rescue_signal"]
+    assert (rescue.status, rescue.last_result, rescue.held_by) == ("unknown", failure, None)
+    assert devices.on == {4} and devices.held == {4} and devices.holds[mark:] == []  # 관문을 닫아 둔다
+    await press(kit, "/api/rescue-signal/off")  # 확인되지 않은(unknown) 기능이라 다시 명령한다
+    await kit.settle()
+    assert kit.state.devices["rescue_signal"].status == "off" and devices.on == set()
+    assert devices.held == set() and devices.holds[mark:] == [(4, False)]
+
+
+async def test_rescue_signal_stays_muted_after_disconnect_while_held(kit):
+    """멈춘 동안 장치가 끊기면 안내가 끝나도 관문을 열지 않는다. 다시 연결돼 꺼짐(off)이 확정되면 연다."""
+    devices = kit.parts.devices
+    speaker = await held_rescue_signal(kit)
+    mark = len(devices.holds)
+    await kit.parts.engine.submit(DeviceResultInput(action_id=None, object=4, status="disconnected"))
+    speaker.release()
+    await kit.settle()
+    assert kit.state.devices["rescue_signal"].held_by is None and devices.held == {4} and devices.holds[mark:] == []
+    await kit.parts.engine.submit(DeviceResultInput(action_id=None, object=4, status="connected"))
+    await kit.settle()
+    assert kit.state.devices["rescue_signal"].status == "off" and devices.holds[mark:] == [(4, False)]
 
 
 async def test_rescue_signal_speaker_unavailable(kit):
@@ -128,7 +203,9 @@ async def test_volume_shape_and_result(kit, path, volume, template):
     assert kit.state.volume == volume
     assert [c.object for c in kit.parts.devices.commands] == [5]
     assert templates_since(kit, mark) == [template]
-    assert volume_events(kit) == [{"speaker": {"volume": volume}}]
+    # 엔진이 한 번만 낸다(버튼 API에서 따로 내지 않음, AC-E5)
+    assert [(e.turn_id, e.data) for e in kit.events if e.type == "status.changed" and "speaker" in e.data] == [
+        (data["turn_id"], {"speaker": {"volume": volume}})]
 
 
 @pytest.mark.parametrize(("path", "steps", "end"), [("/api/volume/up", 3, 100), ("/api/volume/down", 6, 10)])
@@ -143,6 +220,15 @@ async def test_volume_already_at_end(kit, path, steps, end):
     assert data["result"] == "already" and data["speaker"]["volume"] == end
     await kit.settle()
     assert len(kit.parts.devices.commands) == sent and len(volume_events(kit)) == changed
+
+
+@pytest.mark.parametrize(("text", "raw", "volume"), [("소리 키워 줘", "<maum_4>(object=5, type=1)<maum_end>", 80),
+                                                   ("소리 줄여 줘", "<maum_4>(object=5, type=2)<maum_end>", 60)])
+async def test_voice_volume_sends_status_changed_once(kit, text, raw, volume):
+    """음성으로 바꿔도 버튼과 같이 엔진이 status.changed를 한 번 낸다(AC-E5)."""
+    kit.model.add(text, raw)
+    await kit.say(text)
+    assert kit.state.volume == volume and volume_events(kit) == [{"speaker": {"volume": volume}}]
 
 
 async def test_volume_queued_while_reading(kit):
@@ -169,15 +255,22 @@ def test_volume_before_ready_is_503(client, path):
     assert res.status_code == 503 and res.json()["error"]["code"] == "NOT_READY"
 
 
+def timer_start_records(kit: Kit) -> list:
+    return [r for r in kit.records if r.kind == "device_result" and (r.object, r.type) == (3, 1)]
+
+
 async def test_timer_start_pause_resume(kit):
-    """시작 → 30초 뒤 일시정지 → 이어서 재기. 응답의 timer는 엔진이 받아들인 뒤의 상태."""
+    """시작 → 30초 뒤 일시정지 → 이어서 재기. 응답의 timer는 엔진이 받아들인 뒤의 상태다. 시작·재개는 확인 문장이 끝난
+    뒤라 응답에는 바뀌기 전 상태(idle·paused)가 나가고(AC-E1), 일시정지는 누른 순간 멈춘다(AC-E2)."""
     mark = len(kit.spoken)
     data = await press(kit, "/api/timer/start")
     assert list(data) == ["turn_id", "result", "timer"] and data["result"] == "pending"
-    started_at = kit.state.timer.started_at
-    assert data["timer"] == {"object": 3, "status": "running", "elapsed_s": 0, "started_at": started_at}
-    assert started_at is not None
+    assert data["timer"] == {"object": 3, "status": "idle", "elapsed_s": 0, "started_at": None}
     await kit.settle()
+    started_at = kit.state.timer.started_at
+    assert kit.state.timer.status == "running" and started_at is not None
+    records = [(r.source, r.turn_id, r.result) for r in timer_start_records(kit)]
+    assert records == [("button", data["turn_id"], "success")]
     await kit.advance(30)
 
     data = await press(kit, "/api/timer/pause")
@@ -188,8 +281,9 @@ async def test_timer_start_pause_resume(kit):
 
     data = await press(kit, "/api/timer/start")
     assert data["result"] == "pending"
-    assert data["timer"] == {"object": 3, "status": "running", "elapsed_s": 30, "started_at": started_at}
+    assert data["timer"] == {"object": 3, "status": "paused", "elapsed_s": 30, "started_at": started_at}
     await kit.settle()
+    assert kit.state.timer.status == "running" and len(timer_start_records(kit)) == 2
     assert templates_since(kit, mark) == ["T_DEV_TIMER_START", "T_DEV_TIMER_PAUSE", "T_DEV_TIMER_RESUME"]
 
 
@@ -211,7 +305,7 @@ async def test_timer_already(kit, path, template):
 async def test_timer_queued_while_reading(kit):
     speaker = await reading_guidance(kit)
     data = await press(kit, "/api/timer/start")
-    assert data["result"] == "queued"
+    assert data["result"] == "queued" and data["timer"]["status"] == "idle"  # 확인 문장 뒤에 시작(AC-E1)
     speaker.release()
     await kit.settle()
     assert kit.state.timer.status == "running"

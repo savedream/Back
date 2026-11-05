@@ -49,6 +49,7 @@ class Run:
         self._force_replace = False
         self.input_obs_keys: list[str] = []  # 이번 입력이 저장한 관찰값(라우팅을 일으키면 새 routing_no로 다시 매김)
         self.user_record_id: str | None = None  # 이번 사용자 발화 기록
+        self.on_requests: list[tuple[str, str]] = []  # 이번 입력의 소리 기능 켜기 요청(이름, source). queued 대상
 
     # 번호
     def next_id(self, kind: str, prefix: str, width: int = 4) -> str:
@@ -130,9 +131,21 @@ class Run:
         """화면에만 띄우는 알림(ui.notice)."""
         self.event("ui.notice", {"code": code, "template_id": template_id, "text": text})
 
+    def waiting_before(self) -> list[str]:
+        """이 입력 전부터 읽기를 기다리던 문장 중 아직 남은 것."""
+        return [action_id for action_id in self.s.pending_says if action_id in self._earlier_says]
+
     def result(self) -> EngineResult:
         mode = "replace" if self._force_replace or self.s.epoch != self._start_epoch else "append"
+        waiting = self.waiting_before()
         if mode == "replace":
-            for action_id in self._earlier_says & set(self.s.pending_says):
+            for action_id in waiting:
                 self.s.pending_says[action_id].dropped = True  # 시퀀서가 cut으로 돌려줄 문장
-        return EngineResult(turn_id=self.turn_id, state=self.s, actions=self.actions, events=self.events, mode=mode)
+        queued = mode == "append" and any(not self.s.pending_says[a].dropped for a in waiting)
+        if queued:
+            for name, source in self.on_requests:  # 켜기는 읽던 문장 뒤에 확인 문장을 읽고 실행한다(6-10)
+                device = self.s.devices[name]
+                device.queued = {"type": 1, "source": source}
+                self.event("device.state", device.model_dump())
+        return EngineResult(turn_id=self.turn_id, state=self.s, actions=self.actions, events=self.events, mode=mode,
+                            queued=queued)

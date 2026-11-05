@@ -16,6 +16,9 @@ from tests.unit.engine_kit import FIX, ids
 from tests.unit.shell_kit import ShellKit, until_idle, until_speaking
 
 
+RESCUE_ON = DeviceButtonInput(turn_id="t_btn", command=DeviceCommand(object=4, type=1, source="button"))
+
+
 @pytest.fixture
 async def kit():
     k = ShellKit()
@@ -280,12 +283,12 @@ async def test_failed_tick_skips_only_that_deadline(kit, monkeypatch):
     assert ids(await kit.advance(15)) == [("template", "T_NO_SPEECH"), ("step", "EM03-04")]  # 다른 마감은 그대로
 
 
-def fail_once(monkeypatch, kind: str) -> list:
+def fail_once(monkeypatch, kind: str, event: str | None = None) -> list:
     real_reduce = service_module.reduce
     failures = []
 
     def broken(state, inp, ctx):
-        if inp.kind == kind and not failures:
+        if inp.kind == kind and (event is None or inp.event == event) and not failures:
             failures.append(inp)
             raise RuntimeError("시험용 오류")
         return real_reduce(state, inp, ctx)
@@ -295,10 +298,40 @@ def fail_once(monkeypatch, kind: str) -> list:
 
 
 async def test_failed_playback_feedback_does_not_stop_timers(kit, monkeypatch):
-    failures = fail_once(monkeypatch, "playback")
+    failures = fail_once(monkeypatch, "playback", "finished")  # 끝 되먹임(시작 되먹임 실패는 아래 시험)
     await kit.say("등산하다 넘어졌는데 다리를 움직이기 어려워요")
     assert failures and kit.state.pending_says == {}  # 실패한 낭독 끝 되먹임도 읽은 것으로 정리
     assert ids(await kit.advance(15)) == [("template", "T_NO_SPEECH"), ("step", "EM03-01")]
+
+
+async def test_failed_started_feedback_still_speaks_and_leaves_no_hold(kit, monkeypatch):
+    """시작 되먹임 처리가 실패해도 문장은 읽고 kit_guidance를 남기며, 구조신호 멈춤(held_by)이 남지 않는다."""
+    await at_s1b(kit)
+    await kit.engine.submit(RESCUE_ON)
+    await kit.settle()
+    failures = fail_once(monkeypatch, "playback", "started")
+    mark = len(kit.records.records)
+    assert ids(await kit.say("다시 말해 줘")) == [("step", "EM03-04")]
+    assert failures
+    played = [(r.utterance.step_id, r.played) for r in kit.records.records[mark:] if r.kind == "kit_guidance"]
+    assert played == [("EM03-04", "done")]
+    rescue = kit.state.devices["rescue_signal"]
+    assert kit.state.pending_says == {} and not kit.state.announcing
+    assert rescue.held_by is None and kit.devices.held == set()
+
+
+async def test_hold_gate_closes_once_per_batch(kit):
+    """문장 세 개 묶음 동안 구조신호 관문은 한 번 닫고 한 번 연다(문장 사이에 열지 않음). held_by 변화도 두 번."""
+    await at_s1b(kit)
+    await kit.engine.submit(RESCUE_ON)
+    await kit.settle()
+    assert kit.devices.holds == [(4, True), (4, False)]  # 켜는 묶음(확인 문장·다시 묻기)에도 멈췄다가 울린다
+    events, holds = len(kit.events), len(kit.devices.holds)
+    assert ids(await kit.say("네 많이 휘었어요")) == [("step", "EM03-05"), ("step", "EM03-06"), ("step", "EM03-07")]
+    changes = [e.data["held_by"] for e in kit.events[events:]
+               if e.type == "device.state" and e.data["name"] == "rescue_signal"]
+    assert changes == ["tts", None]
+    assert kit.devices.holds[holds:] == [(4, True), (4, False)] and kit.devices.held == set()
 
 
 async def test_failed_turn_after_speech_does_not_freeze_alerts(kit, monkeypatch):
@@ -335,3 +368,57 @@ async def test_tick_that_changes_nothing_is_not_repeated(kit, monkeypatch):
     monkeypatch.setattr(service_module, "reduce", stuck)
     assert await kit.advance(15) == []
     await until_idle(kit.engine, kit.engine.sequencer)
+
+
+def timer_button(typ: int) -> DeviceButtonInput:
+    return DeviceButtonInput(turn_id="t_timer", command=DeviceCommand(object=3, type=typ, source="button"))
+
+
+async def ticks(kit: ShellKit, seconds: float) -> list[dict]:
+    """시계를 넘기고 timer.tick 주기 작업이 돌 만큼 이벤트 루프를 돌린 뒤, 그사이 나온 timer.tick data."""
+    mark = len(kit.events)
+    kit.clock.advance(seconds)
+    for _ in range(50):
+        await asyncio.sleep(0)
+    await kit.settle()
+    return [e.data for e in kit.events[mark:] if e.type == "timer.tick"]
+
+
+async def running_timer(kit: ShellKit) -> str:
+    await kit.engine.submit(timer_button(1))
+    await kit.settle()  # 확인 문장이 끝나 시작(AC-E1)
+    assert kit.state.timer.status == "running"
+    return kit.state.timer.started_at
+
+
+async def test_timer_tick_every_second_while_running(kit):
+    """타이머가 도는 동안 1초마다 timer.tick. data는 화면용 TimerState(엔진 내부 칸 없음)."""
+    started_at = await running_timer(kit)
+    for n in (1, 2, 3):
+        assert await ticks(kit, 1) == [{"object": 3, "status": "running", "elapsed_s": n, "started_at": started_at}]
+
+
+async def test_late_wake_sends_one_tick(kit):
+    """늦게 깨어나도 밀린 tick을 몰아 내지 않는다(구독 큐가 차지 않게)."""
+    await running_timer(kit)
+    assert [d["elapsed_s"] for d in await ticks(kit, 10)] == [10]
+    assert [d["elapsed_s"] for d in await ticks(kit, 1)] == [11]
+
+
+@pytest.mark.parametrize("typ", [3, 4])
+async def test_no_tick_after_pause_or_reset(kit, typ):
+    await running_timer(kit)
+    assert [d["elapsed_s"] for d in await ticks(kit, 2)] == [2]
+    await kit.engine.submit(timer_button(typ))  # 일시정지 또는 초기화(버튼은 확인 창을 거친 것)
+    await kit.settle()
+    assert kit.state.timer.status == ("paused" if typ == 3 else "idle")
+    for _ in range(3):
+        assert await ticks(kit, 1) == []
+
+
+async def test_engine_stop_cancels_ticker():
+    kit = ShellKit()
+    await kit.start()
+    await running_timer(kit)
+    await kit.stop()
+    assert kit.engine._ticker.cancelled()

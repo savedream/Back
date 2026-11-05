@@ -46,7 +46,8 @@ Action = Annotated[SayAction | DeviceAction | RecordAction, Field(discriminator=
 class EngineEvent(BaseModel):
     """화면에 알릴 일. 봉투(seq, at)는 이벤트 버스가 씌운다."""
 
-    type: Literal["turn.result", "session.updated", "alert.started", "alert.ended", "ui.notice", "device.state"]
+    type: Literal["turn.result", "session.updated", "alert.started", "alert.ended", "ui.notice", "device.state",
+                  "status.changed", "speech.final"]
     data: dict
 
 
@@ -58,3 +59,5 @@ class EngineResult(BaseModel):
     # replace: 위치가 바뀐 결과. 시퀀서가 이전 결과의 남은 say를 버리고(cut) device·record는 실행한 뒤 이것을 실행
     # append: 되먹임처럼 위치를 바꾸지 않는 결과. 지금 묶음이 끝난 뒤 실행
     mode: Literal["replace", "append"] = "append"
+    # 읽던 안내 문장이 끝난 뒤 실행됨: append이고 이 입력 전부터 기다리던 버려지지 않은 문장이 남음(버튼 응답 queued)
+    queued: bool = False

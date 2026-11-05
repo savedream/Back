@@ -38,3 +38,12 @@ async def test_timeout_never_answers():
     devices.fail_next("timeout")
     with pytest.raises(TimeoutError):
         await asyncio.wait_for(devices.execute(cmd(2, 1)), 0.01)
+
+
+def test_set_hold_is_idempotent_and_recorded():
+    devices = FakeDevices()
+    devices.set_hold(4, True)
+    devices.set_hold(4, True)
+    assert devices.held == {4}
+    devices.set_hold(4, False)
+    assert devices.held == set() and devices.holds == [(4, True), (4, True), (4, False)]

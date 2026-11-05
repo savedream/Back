@@ -1,6 +1,7 @@
 """리듀서 시험 도구: 셸 없이 reduce()를 돌리며 낭독·장치·기록 되먹임을 바로 넣는다(speak: false와 같은 순서).
 
-hold()를 걸면 낭독 끝 되먹임을 release()까지 미룬다(읽는 중 말하기 버튼·끊기 시험용).
+hold()를 걸면 낭독 끝 되먹임을 release()까지 미룬다(읽는 중 말하기 버튼·끊기 시험용). 잡아 둔 문장은 started()·finish()로
+시퀀서처럼 하나씩 시작·끝낼 수 있다(안내 중 held_by 시험용).
 """
 import re
 from datetime import timedelta
@@ -128,6 +129,15 @@ class EngineKit:
         held, self.held = self.held, []
         for action in held:
             self.feed(PlaybackInput(action_id=action.action_id, event="finished", result=result))
+
+    def started(self) -> None:
+        """잡아 둔 첫 문장의 낭독 시작 되먹임."""
+        self.feed(PlaybackInput(action_id=self.held[0].action_id, event="started"))
+
+    def finish(self, result: str = "done") -> None:
+        """잡아 둔 첫 문장의 낭독 끝 되먹임."""
+        action = self.held.pop(0)
+        self.feed(PlaybackInput(action_id=action.action_id, event="finished", result=result))
 
     def barge_in(self) -> None:
         self.feed(BargeInInput(turn_id="t_barge"))

@@ -43,12 +43,21 @@ class ScriptSpeaker:
 
 
 class ScriptDevices:
-    """받은 명령을 남기고 바로 success. hang이면 응답하지 않는다(시간 초과 시험용)."""
+    """받은 명령을 남기고 바로 success. hang이면 응답하지 않는다(시간 초과 시험용). 음소거 관문 호출도 남긴다."""
 
     def __init__(self, timeline: list | None = None):
         self.commands: list[DeviceCommand] = []
         self.timeline = timeline if timeline is not None else []
         self.hang = False
+        self.held: set[int] = set()
+        self.holds: list[tuple[int, bool]] = []
+
+    def set_hold(self, obj: int, held: bool) -> None:
+        self.holds.append((obj, held))
+        if held:
+            self.held.add(obj)
+        else:
+            self.held.discard(obj)
 
     async def execute(self, command: DeviceCommand) -> DeviceOutcome:
         self.commands.append(command)

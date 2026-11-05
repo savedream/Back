@@ -4,8 +4,12 @@
 """
 import pytest
 
+from app.schemas.device import DeviceCommand
+from app.services.procedure_engine.context import Ctx
+from app.services.procedure_engine.core import recover, resume_session
 from app.services.procedure_engine.functions import is_progress_phrase
-from tests.unit.engine_kit import DB, NO_FIX_LAST, EngineKit, assert_from_db, ids, user_turn
+from app.services.procedure_engine.inputs import DeviceButtonInput, PlaybackInput
+from tests.unit.engine_kit import DB, NO_FIX_LAST, EngineKit, assert_from_db, ids, timedelta, user_turn
 
 
 @pytest.fixture
@@ -309,3 +313,136 @@ def test_all_spoken_text_comes_from_db(kit):
     kit.advance(120)
     for u in kit.spoken:
         assert_from_db(u)
+
+
+def timer_button(kit: EngineKit, typ: int):
+    return kit.feed(DeviceButtonInput(turn_id="t_btn", command=DeviceCommand(object=3, type=typ, source="button")))
+
+
+def timer_records(kit: EngineKit, mark: int = 0) -> list[tuple]:
+    return [(r.type, r.source, r.result) for r in kit.records[mark:] if r.kind == "device_result" and r.object == 3]
+
+
+def voice_timer_start(kit: EngineKit) -> None:
+    kit.model.add("타이머 시작해 줘", "<maum_4>(object=3, type=1)<maum_end>")
+    assert ids(kit.say("타이머 시작해 줘"))[0] == ("template", "T_DEV_TIMER_START")
+
+
+def test_voice_timer_starts_after_its_confirm(kit):
+    """음성 시작도 확인 문장(T_DEV_TIMER_START)이 끝난 뒤 running이 되고, 측정 구간도 그때 시작한다(AC-E1)."""
+    at_s1b(kit)
+    kit.hold()
+    voice_timer_start(kit)
+    timer = kit.state.timer
+    assert timer.status == "idle" and timer.started_at is None and timer.starts_after is not None
+    turn_id = timer.starts_after.turn_id
+    kit.clock.advance(3)
+    kit.finish()  # 확인 문장
+    timer = kit.state.timer
+    assert (timer.status, timer.running_since, timer.starts_after) == ("running", 3, None)
+    [record] = [r for r in kit.records if r.kind == "device_result" and (r.object, r.type) == (3, 1)]
+    assert (record.source, record.turn_id, record.result, record.step_id) == ("voice", turn_id, "success", None)
+
+
+def test_timer_starts_even_if_confirm_is_cut(kit):
+    at_s1b(kit)
+    kit.hold()
+    voice_timer_start(kit)
+    kit.release("cut")
+    assert kit.state.timer.status == "running"
+
+
+def test_step_timer_start_first_keeps_its_segment(kit):
+    """확인 문장을 기다리는 사이 단계 timer:start(EM01-07)가 먼저 시작했으면 그 시작 시각을 덮어쓰지 않는다."""
+    kit.say("사람이 쓰러졌는데 숨을 안 쉬어")
+    kit.say("아니요 대답 없어요")
+    kit.hold()
+    voice_timer_start(kit)
+    kit.clock.advance(2)
+    kit.say("아니요")  # EM01-06~09: 단계 device timer:start는 확인 문장 없이 바로 시작(6-3 규칙 7)
+    assert kit.state.timer.status == "running" and kit.state.timer.running_since == 2
+    kit.clock.advance(3)
+    kit.release("cut")
+    timer = kit.state.timer
+    assert (timer.status, timer.running_since, timer.starts_after) == ("running", 2, None)
+
+
+def test_pause_before_start_cancels_the_start(kit):
+    at_s1b(kit)
+    kit.hold()
+    voice_timer_start(kit)
+    mark = len(kit.records)
+    timer_button(kit, 3)
+    assert ids(kit.spoken[-2:]) == [("template", "T_DEV_ALREADY_OFF"), ("step", "EM03-04")]
+    assert timer_records(kit, mark) == [(1, "voice", "cancelled"), (3, "button", "already")]
+    kit.release()
+    assert kit.state.timer.status == "idle" and kit.state.timer.starts_after is None
+
+
+def test_reset_before_start_cancels_the_start(kit):
+    """시작 전(idle)에 기다리던 시작은 초기화가 취소하고 already(저장할 구간이 없음)."""
+    at_s1b(kit)
+    kit.hold()
+    voice_timer_start(kit)
+    mark = len(kit.records)
+    timer_button(kit, 4)
+    assert ids(kit.spoken[-2:]) == [("template", "T_DEV_ALREADY_OFF"), ("step", "EM03-04")]
+    assert timer_records(kit, mark) == [(1, "voice", "cancelled"), (4, "button", "already")]
+    kit.release()
+    assert kit.state.timer.status == "idle"
+
+
+def test_reset_while_resume_waits_cancels_resume_and_resets(kit):
+    """일시정지 중 재개를 기다리는데 초기화가 오면 재개를 취소하고 지금 구간(일시정지까지)으로 초기화한다."""
+    at_s1b(kit)
+    timer_button(kit, 1)
+    kit.advance(10)
+    timer_button(kit, 3)
+    kit.hold()
+    timer_button(kit, 1)  # 재개(T_DEV_TIMER_RESUME)를 읽는 중
+    kit.clock.advance(5)
+    mark = len(kit.records)
+    timer_button(kit, 4)
+    saved = [r for r in kit.records[mark:] if r.kind == "device_result" and r.type == 4]
+    assert timer_records(kit, mark)[0] == (1, "button", "cancelled") and saved[0].detail == {"elapsed_s": 10}
+    assert kit.state.timer.status == "idle" and ("template", "T_DEV_TIMER_RESET") in ids(kit.spoken[-3:])
+    kit.release()
+    assert kit.state.timer.status == "idle"
+
+
+def test_recover_starts_timer_when_confirm_feedback_fails(kit):
+    """끝 되먹임 처리가 실패해 정리(recover)할 때도 그 확인 문장 뒤로 미룬 시작을 한다."""
+    at_s1b(kit)
+    kit.hold()
+    voice_timer_start(kit)
+    confirm = kit.state.timer.starts_after.action_id
+    res = recover(kit.state, PlaybackInput(action_id=confirm, event="finished", result="done"), kit.ctx())
+    assert res.state.timer.status == "running" and res.state.timer.starts_after is None
+
+
+def test_resume_session_starts_waiting_timer_now(kit):
+    """이어 가기는 읽던 확인 문장을 다시 읽지 않으므로 기다리던 시작을 이어 가는 시각에 한다."""
+    at_s1b(kit)
+    kit.hold()
+    voice_timer_start(kit)
+    ctx = Ctx(db=DB, now=kit.clock.now() + 8, wall=kit.clock.wall() + timedelta(seconds=8))
+    res = resume_session(kit.state, ctx, saved_now=kit.clock.now(), downtime_s=8)
+    timer = res.state.timer
+    assert (timer.status, timer.running_since, timer.starts_after) == ("running", 8, None)
+    assert timer.started_at == ctx.iso()
+
+
+def test_pause_stops_at_press_and_reads_stopped_time(kit):
+    """일시정지는 누른 순간 멈추고(확인 문장 전), T_DEV_TIMER_PAUSE의 분·초는 멈춘 시간(accumulated_s)이다(AC-E2)."""
+    at_s1b(kit)
+    timer_button(kit, 1)
+    kit.advance(75)
+    kit.hold()
+    timer_button(kit, 3)
+    timer = kit.state.timer
+    assert (timer.status, timer.accumulated_s, timer.running_since) == ("paused", 75, None)
+    pause = next(u for u in reversed(kit.spoken) if u.template_id == "T_DEV_TIMER_PAUSE")
+    assert pause.text == "타이머를 잠깐 멈췄어요. 지금까지 일 분 십오 초예요."
+    kit.clock.advance(5)
+    kit.release()
+    assert kit.state.timer.elapsed_s(kit.clock.now()) == 75

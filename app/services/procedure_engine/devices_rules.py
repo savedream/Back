@@ -2,11 +2,14 @@
 
 음성·버튼 요청은 T_DEV_* 확인 문장을 읽고, 장치는 그 문장이 끝난 직후 실행한다(actions 순서). 동작 후 원래 질문을 다시 묻는다.
 """
+from app.schemas.device import PendingStart
 from app.schemas.record import DeviceResultRecord
 from app.services.procedure_engine import engine_constants as C
 from app.services.procedure_engine.context import Run
 from app.services.procedure_engine.flow import announce_gps, set_sound_device
-from app.services.procedure_engine.interrupts import clear_prompt, open_prompt, reask, save_timer_record
+from app.services.procedure_engine.interrupts import (
+    cancel_timer_start, clear_prompt, open_prompt, reask, save_timer_record,
+)
 from app.services.procedure_engine.templates import SOUND_DEVICES_SPOKEN, read_count
 
 _SOUND = {2: ("metronome", "T_DEV_METRO_ON", "T_DEV_METRO_OFF"), 4: ("rescue_signal", "T_DEV_SOS_ON", "T_DEV_SOS_OFF")}
@@ -43,9 +46,35 @@ def _sound(run: Run, obj: int, on: bool, source: str) -> None:
     if device.want == ("on" if on else "off") and device.status != "unknown":
         run.say_template("T_DEV_ALREADY_ON" if on else "T_DEV_ALREADY_OFF")  # 켜진 기능에 켜 줘라고 해도 끄지 않음
         return
-    run.say_template(on_template if on else off_template)
-    # 응답 실패로 확인이 안 되는(unknown) 기능은 같은 요청이어도 다시 명령한다
-    set_sound_device(run, name, on=on, source=source, force=True)
+    if not on and device.queued is not None and _cancel_queued(run, device):
+        run.say_template(off_template)
+        return
+    say_action = run.say_template(on_template if on else off_template)
+    if not on:
+        # 응답 실패로 확인이 안 되는(unknown) 기능은 같은 요청이어도 다시 명령한다
+        set_sound_device(run, name, on=False, source=source, force=True)
+        return
+    prev = {"want": device.want, "status": device.status, "last_off_device": run.s.last_off_device}
+    set_sound_device(run, name, on=True, source=source, force=True, after_say=say_action, prev=prev)
+    run.on_requests.append((name, source))
+
+
+def _cancel_queued(run: Run, device) -> bool:
+    """읽던 안내 뒤로 미룬 켜기에 끄기가 오면 대기를 취소한다(6-10): 응답 대기에서 빼고(시퀀서가 그 켜기 명령을 건너뜀)
+    요청 전 값으로 되돌린다. 끄기 명령은 내지 않는다. 이미 큐에 있는 켜기 확인 문장은 그대로 읽힌다. 취소했으면 True."""
+    queued = [a for a, c in run.s.pending_devices.items() if c["object"] == device.object and "after_say" in c]
+    if not queued:
+        return False
+    command = run.s.pending_devices.pop(queued[-1])
+    prev = command["prev"]
+    device.want, device.status, device.queued = prev["want"], prev["status"], None
+    run.s.last_off_device = prev["last_off_device"]
+    # 취소 기록은 끄기가 아니라 원래 켜기 요청의 턴으로 남긴다(타이머 시작 취소와 같음)
+    base = {**run.record_base(), "turn_id": command.get("turn_id", run.turn_id)}
+    run.record(DeviceResultRecord(**base, object=device.object, type=command["type"], source=command["source"],
+                                  result="cancelled", step_id=command["step_id"]))
+    run.event("device.state", device.model_dump())
+    return True
 
 
 def _no_target(run: Run, on: bool, source: str) -> bool:
@@ -68,23 +97,26 @@ def _no_target(run: Run, on: bool, source: str) -> bool:
 
 
 def _timer(run: Run, typ: int, source: str) -> bool:
-    """경과 시간 타이머(엔진 상태). 초기화 확인 질문을 걸었으면 True."""
+    """경과 시간 타이머(엔진 상태). 초기화 확인 질문을 걸었으면 True.
+
+    시작·재개는 확인 문장이 끝난 뒤에 하고(그때 기록, timers.start_after_confirm), 일시정지는 누른 순간 멈춘다(AC-E1·E2).
+    """
     timer, now = run.s.timer, run.ctx.now
     result = "success"
     if typ == 1:
-        if timer.status == "running":
+        if timer.status == "running" or timer.starts_after is not None:
             run.say_template("T_DEV_ALREADY_ON")
             result = "already"
         else:
             template = "T_DEV_TIMER_START" if timer.status == "idle" else "T_DEV_TIMER_RESUME"
-            run.say_template(template)
-            if timer.status == "idle":
-                timer.started_at = run.ctx.iso()
-            timer.status, timer.running_since = "running", now
+            timer.starts_after = PendingStart(action_id=run.say_template(template), source=source, turn_id=run.turn_id)
+            return False
     elif typ == 2:
         elapsed = timer.elapsed_s(now)
         run.say_template("T_DEV_TIMER_CHECK", min=read_count(elapsed // 60), sec=read_count(elapsed % 60))
     elif typ == 3:
+        if timer.starts_after is not None:
+            cancel_timer_start(run)  # 시작 전에 일시정지가 오면 시작을 취소한다
         if timer.status != "running":
             run.say_template("T_DEV_ALREADY_OFF")
             result = "already"
@@ -95,6 +127,8 @@ def _timer(run: Run, typ: int, source: str) -> bool:
             run.say_template("T_DEV_TIMER_PAUSE", min=read_count(elapsed // 60), sec=read_count(elapsed % 60))
     elif typ == 4:
         if timer.status == "idle":
+            if timer.starts_after is not None:
+                cancel_timer_start(run)
             run.say_template("T_DEV_ALREADY_OFF")  # 저장할 구간이 없음
             result = "already"
         elif source == "button":
@@ -115,6 +149,7 @@ def _volume(run: Run, typ: int, source: str) -> None:
     run.say_template("T_DEV_VOL_UP" if typ == 1 else "T_DEV_VOL_DOWN")
     if run.s.volume != before:
         run.device(5, typ, source)
+        run.event("status.changed", {"speaker": {"volume": run.s.volume}})  # GET /api/devices의 speaker 부분
     run.record(DeviceResultRecord(**run.record_base(), object=5, type=typ, source=source,
                                   result="success" if run.s.volume != before else "already",
                                   detail={"volume": run.s.volume}))

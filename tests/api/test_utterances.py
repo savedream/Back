@@ -155,7 +155,8 @@ async def test_silent_turn_while_reading_stays_speaking(kit):
 
     kit.parts.speaker.speak = held
     await kit.say("여기 어디야", speak=True, settle=False)
-    await until(lambda: kit.parts.engine.sequencer.reading)  # 좌표를 읽는 중
+    # 좌표를 읽는 중. 읽기 전에 낭독 시작 되먹임(held_by, A3)을 한 번 거치므로 speaking이 나올 때까지 기다린다
+    await until(lambda: kit.parts.engine.sequencer.speech_state == "speaking")
     kit.drain()
     mark = len(kit.events)
     # 대기 단계 확인 응답이라 읽을 문장이 없음. speak: false는 앞 낭독이 끝나야 응답하므로 true로

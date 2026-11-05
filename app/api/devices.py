@@ -18,6 +18,7 @@ from app.schemas.record import DeviceResultRecord
 from app.schemas.session import SessionState
 from app.services.procedure_engine.actions import DeviceAction, EngineResult, RecordAction
 from app.services.procedure_engine.inputs import DeviceButtonInput
+from app.services.procedure_engine.view import timer_view
 
 router = APIRouter()
 
@@ -29,24 +30,22 @@ ButtonResult = Literal["pending", "queued", "already"]
 class Pressed:
     turn_id: str
     result: EngineResult
-    reading: bool  # 누를 때 읽던(읽을) 안내 문장이 있었는지
 
 
 async def _press(request: Request, obj: int, typ: int) -> Pressed:
     """버튼 하나 = 턴 하나. 턴 잠금은 쓰지 않고(명세 오류 목록에 AUDIO_BUSY가 없음) 턴 번호만 받는다."""
     state = request.app.state
-    engine = state.parts.engine
-    reading = engine.sequencer.reading  # 읽던 문장이 있으면 확인 문장은 그 뒤에 읽고, 실행도 그 뒤가 된다
     turn_id = state.turn_lock.next_id()
     command = DeviceCommand(object=obj, type=typ, source="button")
-    result = await engine.submit(DeviceButtonInput(turn_id=turn_id, command=command))
-    return Pressed(turn_id=turn_id, result=result, reading=reading)
+    result = await state.parts.engine.submit(DeviceButtonInput(turn_id=turn_id, command=command))
+    return Pressed(turn_id=turn_id, result=result)
 
 
 def _button_result(pressed: Pressed, already: bool) -> ButtonResult:
     if already:
         return "already"
-    return "queued" if pressed.reading else "pending"
+    # 엔진이 정한 값: 읽던(읽을) 안내 문장이 있으면 확인 문장은 그 뒤에 읽고, 실행도 그 뒤가 된다
+    return "queued" if pressed.result.queued else "pending"
 
 
 def _commanded(result: EngineResult, obj: int) -> bool:
@@ -104,14 +103,11 @@ class VolumeOut(BaseModel):
 
 
 async def _volume(request: Request, up: bool):
-    parts = request.app.state.parts
-    _require_speaker(parts.engine.state)
+    _require_speaker(request.app.state.parts.engine.state)
     pressed = await _press(request, 5, 1 if up else 2)
     state = pressed.result.state
     speaker = SpeakerView(connected=state.devices["rescue_signal"].connected, volume=state.volume)
-    already = not _commanded(pressed.result, 5)  # 끝값(10, 100)이면 바꾸지 않는다
-    if not already:
-        parts.events.publish("status.changed", pressed.turn_id, {"speaker": {"volume": state.volume}})
+    already = not _commanded(pressed.result, 5)  # 끝값(10, 100)이면 바꾸지 않는다. 바뀐 음량은 엔진이 status.changed로 낸다
     return ok(VolumeOut(turn_id=pressed.turn_id, result=_button_result(pressed, already), speaker=speaker))
 
 
@@ -141,9 +137,7 @@ class TimerOut(BaseModel):
 
 
 def _timer_view(request: Request, state: SessionState) -> TimerView:
-    timer = state.timer
-    return TimerView(status=timer.status, elapsed_s=timer.elapsed_s(request.app.state.parts.clock.now()),
-                     started_at=timer.started_at)
+    return TimerView(**timer_view(state.timer, request.app.state.parts.clock.now()))
 
 
 def _recorded_result(result: EngineResult, obj: int, typ: int) -> str | None:

@@ -54,12 +54,26 @@ class Rig:
         self.clock = FakeClock()
         self.bus = EventBus(self.clock)
         self.sub = self.bus.subscribe(maxsize=0)  # 0: 크기 제한 없음
-        self.seq = Sequencer(DB, self.bus, self.speaker, self.devices, self.records, self.feed, lambda: STATE,
+        self.state = STATE.model_copy(deep=True)
+        self.seq = Sequencer(DB, self.bus, self.speaker, self.devices, self.records, self.feed, lambda: self.state,
                              self.clock, device_timeout_s)
+        self.on_started = None  # 낭독 시작 되먹임을 엔진이 처리하는 사이에 할 일(시험용)
+
+    def submit(self, res: EngineResult, speak: bool = True):
+        """엔진처럼 장치 명령을 응답 대기(pending_devices)에 올린 뒤 넘긴다. 시퀀서는 여기 없는 소리 기능 명령을 건너뛴다."""
+        for a in res.actions:
+            if isinstance(a, DeviceAction):
+                self.state.pending_devices[a.action_id] = {"object": a.command.object, "type": a.command.type,
+                                                           "source": a.command.source, "step_id": None}
+        return self.seq.submit(res, speak)
 
     async def feed(self, inp):
         self.fed.append(inp)
-        if isinstance(inp, PlaybackInput):
+        if isinstance(inp, PlaybackInput) and inp.event == "started":
+            self.timeline.append(("started", inp.action_id))
+            if self.on_started is not None:
+                self.on_started(inp)
+        elif isinstance(inp, PlaybackInput):
             self.timeline.append(("finished", inp.action_id, inp.result))
 
     def events(self) -> list[tuple]:
@@ -71,7 +85,10 @@ class Rig:
         return out
 
     def finished(self) -> list[tuple]:
-        return [(i.action_id, i.result) for i in self.fed if isinstance(i, PlaybackInput)]
+        return [(i.action_id, i.result) for i in self.fed if isinstance(i, PlaybackInput) and i.event == "finished"]
+
+    def started(self) -> list[str]:
+        return [i.action_id for i in self.fed if isinstance(i, PlaybackInput) and i.event == "started"]
 
 
 @pytest.fixture
@@ -83,7 +100,7 @@ async def rig():
 
 
 async def test_says_in_order_with_screen_events(rig):
-    rig.seq.submit(result(say(1), say(2, "EM03-01")))
+    rig.submit(result(say(1), say(2, "EM03-01")))
     await until_idle(rig.seq)
     assert [u.utterance_id for u in rig.speaker.spoken] == ["u_1", "u_2"]
     assert rig.finished() == [("x_1", "done"), ("x_2", "done")]
@@ -92,7 +109,7 @@ async def test_says_in_order_with_screen_events(rig):
 
 
 async def test_guide_say_carries_record_id_and_guide_step_fields(rig):
-    rig.seq.submit(result(say(1, "EM03-01")))
+    rig.submit(result(say(1, "EM03-01")))
     await until_idle(rig.seq)
     step, said = rig.sub.queue.get_nowait(), rig.sub.queue.get_nowait()
     assert step.data == {"manual_id": "EM-03", "step_id": "EM03-01", "kind": DB.steps_by_id["EM03-01"]["kind"],
@@ -102,17 +119,17 @@ async def test_guide_say_carries_record_id_and_guide_step_fields(rig):
 
 
 async def test_same_step_again_does_not_repeat_guide_step(rig):
-    rig.seq.submit(result(say(1, "EM03-04")))
-    rig.seq.submit(result(say(2), say(3, "EM03-04")))
+    rig.submit(result(say(1, "EM03-04")))
+    rig.submit(result(say(2), say(3, "EM03-04")))
     await until_idle(rig.seq)
     assert [k for t, k in rig.events() if t == "guide.step"] == ["EM03-04"]
 
 
 async def test_replace_cuts_remaining_says_but_runs_devices(rig):
     rig.speaker.hold()
-    rig.seq.submit(result(say(1), device(2), say(3)))
+    rig.submit(result(say(1), device(2), say(3)))
     await until_speaking(rig.speaker)
-    rig.seq.submit(result(say(4), mode="replace", turn_id="t_0002"))
+    rig.submit(result(say(4), mode="replace", turn_id="t_0002"))
     rig.speaker.release()
     await until_idle(rig.seq)
     assert rig.finished() == [("x_1", "cut"), ("x_3", "cut"), ("x_4", "done")]
@@ -122,9 +139,9 @@ async def test_replace_cuts_remaining_says_but_runs_devices(rig):
 
 async def test_append_keeps_current_batch(rig):
     rig.speaker.hold()
-    rig.seq.submit(result(say(1), say(2)))
+    rig.submit(result(say(1), say(2)))
     await until_speaking(rig.speaker)
-    rig.seq.submit(result(say(3)))
+    rig.submit(result(say(3)))
     rig.speaker.release()
     await until_idle(rig.seq)
     assert rig.finished() == [("x_1", "done"), ("x_2", "done"), ("x_3", "done")]
@@ -132,41 +149,73 @@ async def test_append_keeps_current_batch(rig):
 
 async def test_device_runs_after_preceding_say_and_does_not_block_next_say(rig):
     rig.devices.hang = True
-    rig.seq.submit(result(say(1), device(2), say(3)))
-    while len(rig.timeline) < 4:
+    rig.submit(result(say(1), device(2), say(3)))
+    while len(rig.timeline) < 6:  # 다음 문장(u_3)을 읽기 시작할 때까지
         await asyncio.sleep(0)
     assert not rig.seq.idle  # 장치 응답을 기다리는 중
     rig.clock.advance(2)  # 응답 제한 2초(엔진 시계)
     await until_idle(rig.seq)
-    assert rig.timeline[:4] == [("say", "u_1"), ("finished", "x_1", "done"), ("device", 2, 1), ("say", "u_3")]
+    # 소리 내 읽는 문장은 읽기 직전에 시작 되먹임을 넣는다(A3, held_by). 장치 명령은 앞 문장 뒤, 다음 문장 소리보다 먼저
+    assert rig.timeline[:6] == [("started", "x_1"), ("say", "u_1"), ("finished", "x_1", "done"), ("started", "x_3"),
+                                ("device", 2, 1), ("say", "u_3")]
     [res] = [i for i in rig.fed if isinstance(i, DeviceResultInput)]
     assert (res.action_id, res.object, res.status) == ("x_2", 2, "timeout")
 
 
+async def test_cancelled_sound_command_is_skipped(rig):
+    """응답 대기에 없는(대기 중 끄기로 취소된) 소리 기능 명령은 실행도 되먹임도 하지 않는다. 음량은 해당 없음."""
+    rig.seq.submit(result(say(1), device(2, obj=4), device(3, obj=5)))  # 응답 대기에 올리지 않고 바로 넘김
+    await until_idle(rig.seq)
+    assert rig.devices.commands == [DeviceCommand(object=5, type=1, source="engine")]
+    assert [i.action_id for i in rig.fed if isinstance(i, DeviceResultInput)] == ["x_3"]
+
+
 async def test_record_result_is_reported_only_when_wanted(rig):
     rig.records.fail_next_save()
-    rig.seq.submit(result(record(1, wants_result=True), record(2)))
+    rig.submit(result(record(1, wants_result=True), record(2)))
     await until_idle(rig.seq)
     assert [(i.action_id, i.ok) for i in rig.fed if isinstance(i, RecordSavedInput)] == [("x_1", False)]
     assert [(r.record_id, r.saved) for r in rig.records.records] == [("r_1", False), ("r_2", True)]
 
 
 async def test_speak_false_finishes_says_without_speaker(rig):
-    batch = rig.seq.submit(result(say(1), say(2, "EM03-01")), speak=False)
+    batch = rig.submit(result(say(1), say(2, "EM03-01")), speak=False)
     await batch.done
     assert rig.speaker.spoken == [] and rig.finished() == [("x_1", "done"), ("x_2", "done")]
     assert ("guide.say", "u_2") in rig.events()
+    assert rig.started() == []  # 소리를 내지 않으니 시작 되먹임도 없다
+
+
+async def test_started_feedback_comes_before_sound(rig):
+    """소리 내 읽는 문장은 시작 되먹임을 엔진이 처리한 뒤에 읽는다(소리 기능 멈춤이 먼저, A3)."""
+    rig.submit(result(say(1)))
+    await until_idle(rig.seq)
+    assert rig.timeline == [("started", "x_1"), ("say", "u_1"), ("finished", "x_1", "done")]
+
+
+async def test_cut_while_waiting_for_started_is_not_spoken(rig):
+    """시작 되먹임을 기다리는 사이 replace가 오면 그 문장은 화면에도 내지 않고 읽지도 않는다."""
+    def replace_first(inp):
+        if inp.action_id == "x_1":
+            rig.submit(result(say(2), mode="replace", turn_id="t_0002"))
+
+    rig.on_started = replace_first
+    rig.submit(result(say(1)))
+    await until_idle(rig.seq)
+    assert [u.utterance_id for u in rig.speaker.spoken] == ["u_2"]
+    assert rig.finished() == [("x_1", "cut"), ("x_2", "done")]
+    assert ("guide.say", "u_1") not in rig.events()
 
 
 async def test_tts_failure_is_text_only(rig):
     rig.speaker.fail = True
-    rig.seq.submit(result(say(1)))
+    rig.submit(result(say(1)))
     await until_idle(rig.seq)
     assert rig.finished() == [("x_1", "text_only")]
 
 
 async def test_empty_result_is_done_at_once(rig):
-    assert rig.seq.submit(result()).done.done()
+    assert rig.submit(result()).done.done()
 
 
 async def test_unexpected_error_still_reports_finished(rig, monkeypatch):
@@ -174,19 +223,19 @@ async def test_unexpected_error_still_reports_finished(rig, monkeypatch):
         raise RuntimeError("시험용 오류")
 
     monkeypatch.setattr(rig.bus, "publish", broken_publish)
-    rig.seq.submit(result(say(1)))
+    rig.submit(result(say(1)))
     await until_idle(rig.seq)
     assert rig.finished() == [("x_1", "text_only")]
 
 
 async def test_first_sound_marks_batch_once(rig):
-    batch = rig.seq.submit(result(say(1), say(2)))
+    batch = rig.submit(result(say(1), say(2)))
     await until_idle(rig.seq)
     assert batch.first_sound.done()
 
 
 async def test_silent_batch_has_no_sound(rig):
-    batch = rig.seq.submit(result(say(1)), speak=False)
+    batch = rig.submit(result(say(1)), speak=False)
     await batch.done
     assert not batch.first_sound.done()
 
@@ -195,7 +244,7 @@ async def test_stop_cancels_unanswered_device_call():
     r = Rig()
     r.seq.start()
     r.devices.hang = True
-    r.seq.submit(result(device(1)))
+    r.submit(result(device(1)))
     while not r.devices.commands:
         await asyncio.sleep(0)
     pending = set(r.seq._side)

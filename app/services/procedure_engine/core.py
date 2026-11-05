@@ -55,6 +55,7 @@ def reduce(state: SessionState, inp: EngineInput, ctx: Ctx) -> EngineResult:
     if continues and not run.s.speech_active:  # 사용자가 말하는 중이면 그 말을 덮어 읽지 않는다
         continue_from_say(run)
     timers.sync_timers(run)
+    timers.sync_holds(run)
     return run.result()
 
 
@@ -62,14 +63,22 @@ def recover(state: SessionState, inp: EngineInput, ctx: Ctx) -> EngineResult:
     """입력 처리가 예외로 실패했을 때(엔진 버그) 멈추지 않게 최소한만 정리한다.
 
     그 문장은 다 읽은 것으로, 그 턴은 끝난 것으로 보고 마감을 다시 건다. 남은 문장이나 말소리 상태 하나 때문에
-    무응답·확인 질문·알림 타이머가 모두 멈추는 것을 막는다.
+    무응답·확인 질문·알림 타이머가 모두 멈추는 것을 막는다. 낭독 시작 되먹임이 실패했으면 시작 표시만 되돌리고 문장은
+    남긴다(끝 되먹임이 와야 빼고 kit_guidance를 남긴다).
     """
     run = Run(state, ctx, getattr(inp, "turn_id", None))
-    if inp.kind == "playback":
+    if inp.kind == "playback" and inp.event == "started":
+        pending = run.s.pending_says.get(inp.action_id)
+        if pending is not None:
+            pending.started = False
+    elif inp.kind == "playback":
         run.s.pending_says.pop(inp.action_id, None)
+        timers.confirm_finished(run, inp.action_id)
     if inp.kind in ("function_call", "model_error", "progress_phrase", "speech_activity"):
         run.s.speech_active = False
+    timers.end_announcing(run)
     timers.sync_timers(run)
+    timers.sync_holds(run)
     return run.result()
 
 
@@ -110,9 +119,11 @@ def new_session(ctx: Ctx, previous: SessionState | None = None, turn_id: str | N
                          started_at=ctx.iso())
     if previous is not None:
         state.counters = previous.counters.model_copy()
-        state.devices = {k: d.model_copy() for k, d in previous.devices.items()}
+        # 읽던 안내 뒤로 미룬 요청·멈춤 표시는 이전 세션의 것이라 버린다(시퀀서는 이 상태에 없는 장치 명령을 건너뛴다)
+        state.devices = {k: d.model_copy(update={"queued": None, "held_by": None}) for k, d in previous.devices.items()}
         state.volume = previous.volume
         state.mic = previous.mic.model_copy()
+        state.capturing = previous.capturing  # 녹음 중에 세션을 바꿔도 녹음은 이어진다
         state.alerts = [a.model_copy() for a in previous.alerts]
     run = Run(state, ctx, turn_id)
     run.preempt()
@@ -120,6 +131,7 @@ def new_session(ctx: Ctx, previous: SessionState | None = None, turn_id: str | N
         set_sound_device(run, name, on=False, source="engine")
     cancel_alerts(run)
     run.say_template("T_WELCOME")
+    timers.sync_holds(run)
     return run.result()
 
 
@@ -128,8 +140,9 @@ def resume_session(state: SessionState, ctx: Ctx, saved_now: float, downtime_s: 
 
     엔진 시계의 시각(알림 마감, 타이머 구간 시작, GPS 재시도 마감)은 저장 시각 기준 남은 시간에서 끊긴 시간(downtime_s)을
     뺀 만큼으로 옮긴다. 끊긴 동안 끝난 알림은 마감이 이미 지나 다음 Tick에서 바로 처리된다. 읽던 문장·말소리·확인 질문·
-    응답을 기다리던 장치 명령과 무응답·대기 마감은 버리고(다시 읽으면 sync_timers가 다시 건다), 켜져 있던
-    메트로놈·구조신호는 다시 켠다(재연결 때 자동으로 울리지 않는 규칙의 예외). T_RESUME 뒤에, 다 읽지 못한 단계 문장이
+    응답을 기다리던 장치 명령·안내 중과 녹음 중 표시·대기(queued)와 멈춤(held_by) 표시와 무응답·대기 마감은
+    버리고(다시 읽으면 sync_timers가 다시 건다), 켜져 있던 메트로놈·구조신호는 다시 켠다(재연결 때 자동으로 울리지
+    않는 규칙의 예외). T_RESUME 뒤에, 다 읽지 못한 단계 문장이
     있었으면 말하기 버튼처럼 그 첫 단계로 되돌려 거기부터 읽고, 없으면 현재 단계를 다시 읽는다.
     안내 시작 전(현재 단계 없음, idle)이면 T_RESUME 대신 T_WELCOME을 읽는다.
     """
@@ -141,9 +154,14 @@ def resume_session(state: SessionState, ctx: Ctx, saved_now: float, downtime_s: 
             alert.deadline += shift
     if s.timer.running_since is not None:
         s.timer.running_since += shift
+    if s.timer.starts_after is not None:
+        timers.start_after_confirm(run)  # 확인 문장은 다시 읽지 않으므로 이어 가는 지금 시작한다
     if s.gps_retry is not None:
         s.gps_retry.give_up_at += shift
     s.pending_says, s.speech_active, s.pending_devices, s.timer_reset_record = {}, False, {}, None
+    s.announcing = s.capturing = False
+    for device in s.devices.values():
+        device.queued = device.held_by = None
     s.no_speech.deadline = None
     s.wait_deadline = None
     clear_prompt(run)
@@ -163,4 +181,5 @@ def resume_session(state: SessionState, ctx: Ctx, saved_now: float, downtime_s: 
         functions.repeat(run, 2, 0)  # ask면 질문, wait면 마지막으로 읽은 단계
         continue_from_say(run)  # say 단계(말하기 버튼으로 되돌아온 곳)면 그 단계부터
     timers.sync_timers(run)
+    timers.sync_holds(run)
     return run.result()

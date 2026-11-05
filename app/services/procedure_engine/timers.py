@@ -2,7 +2,7 @@
 
 시간은 상태의 마감 시각으로 두고, 셸이 가장 이른 마감에 TickInput을 넣는다. epoch로 버리지 않고 규칙으로만 취소한다.
 """
-from app.schemas.record import KitGuidanceRecord
+from app.schemas.record import DeviceResultRecord, KitGuidanceRecord
 from app.schemas.session import SessionState
 from app.services.procedure_engine import engine_constants as C
 from app.services.procedure_engine.context import Run
@@ -76,7 +76,11 @@ def sync_timers(run: Run) -> None:
 
 
 def handle_playback(run: Run, action_id: str, event: str, result: str | None) -> None:
-    if event != "finished":
+    if event == "started":
+        pending = run.s.pending_says.get(action_id)
+        if pending is not None and not pending.dropped:
+            pending.started = True
+            run.s.announcing = True
         return
     pending = run.s.pending_says.pop(action_id, None)
     if pending is not None:
@@ -91,6 +95,63 @@ def handle_playback(run: Run, action_id: str, event: str, result: str | None) ->
     prompt = run.s.pending_prompt
     if prompt is not None and prompt.waits_for_action == action_id:
         prompt.waits_for_action = None  # 확인 질문을 다 읽음. 15초는 sync_timers가 건다
+    confirm_finished(run, action_id)
+    end_announcing(run)
+
+
+def confirm_finished(run: Run, action_id: str) -> None:
+    """기기 확인 문장의 낭독이 끝남(끊겨도 같음): 그 문장 뒤로 미룬 켜기의 queued를 풀고(시퀀서는 바로 다음에 그 명령을
+    실행한다), 그 문장 뒤로 미룬 타이머 시작·재개를 한다."""
+    for command in run.s.pending_devices.values():
+        if command.get("after_say") != action_id:
+            continue
+        device = next(d for d in run.s.devices.values() if d.object == command["object"])
+        if device.queued is not None:
+            device.queued = None
+            run.event("device.state", device.model_dump())
+    starts_after = run.s.timer.starts_after
+    if starts_after is not None and starts_after.action_id == action_id:
+        start_after_confirm(run)
+
+
+def start_after_confirm(run: Run) -> None:
+    """미룬 타이머 시작·재개를 지금 한다(AC-E1). 그사이 단계 timer:start가 먼저 시작했으면 그 구간을 그대로 둔다."""
+    timer = run.s.timer
+    pending, timer.starts_after = timer.starts_after, None
+    if timer.status == "running":
+        return
+    if timer.status == "idle":
+        timer.started_at = run.ctx.iso()
+    timer.status, timer.running_since = "running", run.ctx.now
+    run.record(DeviceResultRecord(**{**run.record_base(), "turn_id": pending.turn_id}, object=3, type=1,
+                                  source=pending.source, result="success", step_id=pending.step_id))
+
+
+def end_announcing(run: Run) -> None:
+    """버려지지 않은 읽을 문장이 다 끝나면 안내 중이 끝난다."""
+    if not any(not p.dropped for p in run.s.pending_says.values()):
+        run.s.announcing = False
+
+
+def hold_reason(state: SessionState, name: str) -> str | None:
+    """소리 충돌(⑦): 켜 둔(want on) 소리 기능을 잠시 멈출 까닭. 구조신호는 말하기 버튼 녹음 중이면 recording(먼저 봄),
+    안내 중이면 tts. 메트로놈은 압박 구간(cpr)이면 안내 중에도 멈추지 않는다."""
+    if state.devices[name].want != "on":
+        return None
+    if name == "rescue_signal" and state.capturing:
+        return "recording"
+    if name == "metronome" and "cpr" in state.flags:
+        return None
+    return "tts" if state.announcing else None
+
+
+def sync_holds(run: Run) -> None:
+    """입력 하나를 처리한 끝에 held_by를 상태에 맞추고 바뀐 기능은 device.state로 알린다. 장치는 셸이 held_by에 맞춘다."""
+    for name, device in run.s.devices.items():
+        reason = hold_reason(run.s, name)
+        if device.held_by != reason:
+            device.held_by = reason
+            run.event("device.state", device.model_dump())
 
 
 def handle_tick(run: Run) -> None:
