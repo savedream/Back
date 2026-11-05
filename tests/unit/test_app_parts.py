@@ -50,6 +50,14 @@ def test_real_model_needs_model_dir():
             pass
 
 
+def test_real_model_needs_torch(monkeypatch, tmp_path):
+    """torch·transformers 없이(.[dev]만 설치) 실제 모델을 고르면 설치 방법을 알려 준다."""
+    monkeypatch.setattr("app.core.parts.HfModelRunner", None)
+    with pytest.raises(RuntimeError, match=r"\.\[model\]"):
+        with TestClient(create_app(Settings(_env_file=None, fake_model=False, model_dir=tmp_path))):
+            pass
+
+
 class LoadingModel(FakeModel):
     """적재를 시험에서 풀어 주는 실제 모델 자리(torch 없이 서버 기동 순서만 본다)."""
 

@@ -75,10 +75,10 @@ def read_boot_id(path: Path) -> str | None:
 
 def _real_model(settings: Settings) -> ModelRunner:
     """PC용 실제 모델 실행기. 적재·예열은 서버를 켠 뒤 백그라운드로 한다(app/main.py)."""
-    if HfModelRunner is None:
-        raise RuntimeError("실제 모델을 쓰려면 torch·transformers가 필요함: pip install -e '.[model]'")
     if settings.model_dir is None or not settings.model_dir.is_dir():
         raise RuntimeError(f"fake_model=false면 실제 모델 폴더가 필요함(SALYEO_MODEL_DIR): {settings.model_dir}")
+    if HfModelRunner is None:
+        raise RuntimeError("실제 모델을 쓰려면 torch·transformers가 필요함: pip install -e '.[model]'")
     return HfModelRunner(settings.model_dir)
 
 
