@@ -35,7 +35,7 @@ class Settings(BaseSettings):
 
     # TODO(미정: 임시값) 3초 지연 예산 배분과 실측 뒤 확정
     vad_silence_s: float = 0.8
-    max_utterance_s: float = 15
+    max_utterance_s: float = 15  # 최대 발화 길이. 말하기 버튼 녹음도 여기서 자동 종료(①)
     model_timeout_s: float = 5
     post_tts_guard_ms: int = 300
     device_timeout_s: float = 2
@@ -57,6 +57,8 @@ class Settings(BaseSettings):
     fake_gps: bool = True
     # 가짜 모드에서 서버를 켜면 VAD·STT·TTS·LLM 적재와 예열을 바로 끝난 것으로 표시한다
     fake_auto_ready: bool = True
+    # 가짜 STT가 알아들은 것으로 내는 문장(가짜 모델 표 첫 행, 화면 예시 문장). 시험은 FakeStt.queue로 다음 문장을 바꾼다
+    fake_stt_text: str = "등산하다 넘어졌는데 다리를 움직이기 어려워요"
 
 
 @lru_cache

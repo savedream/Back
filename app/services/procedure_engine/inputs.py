@@ -12,12 +12,17 @@ from app.schemas.device import DeviceCommand, Location
 from app.schemas.function_call import FunctionCall
 
 
+# 사용자 턴의 출처: 텍스트 턴(/api/utterances)·말하기 버튼·상시 듣기(VAD)
+Trigger = Literal["text", "button", "vad"]
+
+
 class UserTurn(BaseModel):
     turn_id: str
     epoch: int
     step_id: str | None
     text: str  # STT 원문(텍스트 턴이면 넣은 문장)
     normalized: str
+    trigger: Trigger = "text"  # text가 아니면(음성 턴) 엔진이 알아들은 문장(speech.final)을 낸다
 
 
 class FunctionCallInput(UserTurn):
@@ -102,6 +107,13 @@ class SpeechActivityInput(BaseModel):
     state: Literal["started", "ended", "cancelled"]
 
 
+class CaptureInput(BaseModel):
+    """말하기 버튼 녹음 시작·끝(capturing). 녹음 동안 켜 둔 구조신호를 멈춘다(held_by recording, ⑦)."""
+
+    kind: Literal["capture"] = "capture"
+    state: Literal["started", "ended"]
+
+
 class MicInput(BaseModel):
     """마이크 연결·끊김(mic_event)과 일시정지 설정(mic_setting)."""
 
@@ -134,6 +146,7 @@ EngineInput = Annotated[
     | RecordSavedInput
     | LocationUpdateInput
     | SpeechActivityInput
+    | CaptureInput
     | MicInput
     | TickInput
     | SessionResetInput,

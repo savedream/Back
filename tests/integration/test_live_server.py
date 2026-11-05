@@ -1,4 +1,4 @@
-"""실제 서버 통합 시험(US-008): uvicorn을 스레드로 띄우고 HTTP로 SSE 스트림·말 넣기·세션 복구·종료를 확인한다."""
+"""실제 서버 통합 시험(US-008): uvicorn을 스레드로 띄우고 HTTP로 SSE 스트림·말 넣기·말하기 버튼·세션 복구·종료를 확인한다."""
 import asyncio
 import json
 import signal
@@ -121,6 +121,29 @@ async def test_stream_gets_utterance_events_and_session_recovers_missed(live):
         assert session["seq"] > seqs[-1]
         assert session["seq"] == live.server.app.state.parts.events.seq
         assert session["step_id"] == missed["step_id"] == live.server.app.state.parts.engine.state.step_id
+
+
+async def test_button_speech_turn_events_in_order(live):
+    """말하기 버튼 한 턴의 실제 SSE 순서(이벤트 스트림 명세 음성 턴): speech.state capturing → processing → speech.final →
+    turn.result. 알아들은 문장은 가짜 STT 기본 문장이고 record_id는 그 턴의 user_utterance 기록이다."""
+    async with httpx.AsyncClient(base_url=live.url, timeout=TIMEOUT) as http:
+        async with http.stream("GET", "/api/events") as res:
+            frames = Frames(res)
+            assert await frames.next() == ["retry: 1000"]
+            turn_id = (await http.post("/api/speech/start")).json()["data"]["turn_id"]
+            assert (await http.post("/api/speech/stop")).status_code == 202
+            events = await frames.until("turn.result")
+        log = (await http.get("/api/session/log")).json()["data"]["records"]
+    kinds = [(e["type"], e["data"].get("state")) for e in events
+             if e["type"] in ("speech.state", "speech.final", "turn.result")]
+    first = kinds.index(("speech.state", "capturing"))
+    assert kinds[first:] == [("speech.state", "capturing"), ("speech.state", "processing"), ("speech.final", None),
+                             ("turn.result", None)]
+    final = next(e for e in events if e["type"] == "speech.final")
+    assert final["turn_id"] == events[-1]["turn_id"] == turn_id
+    assert final["data"]["text"] == "등산하다 넘어졌는데 다리를 움직이기 어려워요"
+    user = next(r for r in log if r["kind"] == "user_utterance")
+    assert (user["record_id"], user["turn_id"]) == (final["data"]["record_id"], turn_id)
 
 
 async def test_graceful_shutdown_after_client_closed(live):

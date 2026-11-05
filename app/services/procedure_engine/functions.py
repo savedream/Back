@@ -21,6 +21,8 @@ def _record_user(run: Run, inp, fc: FunctionCall | None, corrects: str | None = 
                               corrects=corrects, note=note)
     run.user_record_id = rec.record_id
     run.record(rec)
+    if inp.trigger != "text":  # 음성 턴: 알아들은 문장. 기록 ID를 함께 보내야 해서 엔진이 낸다
+        run.event("speech.final", {"text": inp.text, "normalized": inp.normalized, "record_id": rec.record_id})
 
 
 def handle_function_call(run: Run, inp: FunctionCallInput) -> None:

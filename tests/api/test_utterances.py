@@ -1,5 +1,6 @@
 """POST /api/utterances: 응답 모양, 400, 503, 409, 이벤트 (명세서 "[시험] 문장으로 한 턴 처리(내부 API)")."""
 import asyncio
+import time
 
 import pytest
 
@@ -182,3 +183,29 @@ async def test_latency_counts_until_first_sound(kit):
     await kit.settle()
     latency = next(e.data for e in kit.events if e.type == "turn.latency")
     assert latency["tts_first"] >= 50 and latency["e2e"] >= latency["tts_first"]
+
+
+async def test_turn_takes_t0_and_earlier_latency(kit):
+    """음성 턴은 STT 뒤에 같은 경로를 탄다. t0(말하기 완료 시각)와 앞서 잰 stt 시간을 넘기면 turn.latency에 쓴다."""
+    t0 = time.perf_counter() - 1  # 1초 전에 말하기 완료를 누름
+    reply = await turn_module.run_utterance(kit.parts, 5, "t_voice", "등산하다 넘어졌는데 다리를 움직이기 어려워요", True,
+                                            started=t0, latency={"stt": 7})
+    await kit.settle()
+    assert reply.latency_ms["stt"] == 7 and set(reply.latency_ms) == {"stt", "normalize", "model", "parse", "engine"}
+    latency = next(e for e in kit.events if e.type == "turn.latency")
+    assert latency.turn_id == "t_voice" and latency.data["stt"] == 7 and latency.data["vad_tail"] is None
+    assert latency.data["e2e"] >= 1000
+
+
+async def test_voice_turn_goes_through_stt_then_same_path(kit):
+    """음성 턴: STT 뒤 문장 턴과 같은 경로(trigger button, speech.final). 빈 문장이면 모델 없이 인식 실패(STT_EMPTY)."""
+    recorder, stt = kit.parts.recorder, kit.parts.stt
+    stt.queue.extend(["", "등산하다 넘어졌는데 다리를 움직이기 어려워요"])
+    for turn_id in ("t_v1", "t_v2"):
+        recorder.start(turn_id)
+        await turn_module.run_voice_turn(kit.parts, 5, recorder.stop(), time.perf_counter())
+        await kit.settle()
+    assert kit.model.calls == 1
+    assert [(e.type, e.turn_id) for e in kit.events if e.type in ("ui.notice", "speech.final")] == [
+        ("ui.notice", "t_v1"), ("speech.final", "t_v2")]
+    assert kit.state.step_id == "EM03-01"

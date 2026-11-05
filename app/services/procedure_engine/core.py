@@ -41,6 +41,8 @@ def reduce(state: SessionState, inp: EngineInput, ctx: Ctx) -> EngineResult:
         timers.handle_location(run)
     elif kind == "speech_activity":
         timers.handle_speech(run, inp.state)
+    elif kind == "capture":
+        run.s.capturing = inp.state == "started"  # held_by는 끝에서 sync_holds가 맞춘다
     elif kind == "mic":
         timers.handle_mic(run, inp.connected, inp.paused)
     elif kind == "tick":

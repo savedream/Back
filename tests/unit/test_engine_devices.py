@@ -9,7 +9,7 @@ import pytest
 from app.schemas.device import DeviceCommand
 from app.schemas.session import SessionState
 from app.services.procedure_engine.core import new_session, recover, resume_session
-from app.services.procedure_engine.inputs import DeviceButtonInput, PlaybackInput
+from app.services.procedure_engine.inputs import CaptureInput, DeviceButtonInput, PlaybackInput
 from app.services.procedure_engine.timers import hold_reason
 from tests.unit.engine_kit import EngineKit, ids
 
@@ -106,6 +106,20 @@ def test_recording_comes_before_tts():
     assert hold_reason(s, "rescue_signal") == "tts"
     s.devices["rescue_signal"].want = "off"
     assert hold_reason(s, "rescue_signal") is None  # 끄기로 요청했으면 멈춤 표시도 없다
+
+
+def test_rescue_signal_held_while_button_recording(kit):
+    """말하기 버튼 녹음 시작·끝(CaptureInput)으로 녹음 중 표시를 바꾸고, 켜 둔 구조신호는 녹음 동안 recording(AC-S2)."""
+    at_s1b(kit)
+    kit.say("구조 신호 켜 줘")
+    mark = len(kit.events)
+    kit.feed(CaptureInput(state="started"))
+    assert kit.state.capturing and held_by(kit) == "recording" and held_by(kit, "metronome") is None
+    kit.feed(CaptureInput(state="ended"))
+    assert not kit.state.capturing and held_by(kit) is None
+    changes = [e.data["held_by"] for e in kit.events[mark:]
+               if e.type == "device.state" and e.data["name"] == "rescue_signal"]
+    assert changes == ["recording", None]
 
 
 def test_dropped_say_does_not_start_announcing(kit):

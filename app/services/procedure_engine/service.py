@@ -1,6 +1,6 @@
 """절차 엔진 서비스 (계획 3-2·3-4): 엔진 태스크 하나가 입력을 하나씩 리듀스하고, 가장 이른 마감 시각에 깨어나 TickInput을 넣는다.
 
-리듀스 직후 한 곳에서 이벤트를 내고(turn.result → session.updated → 나머지) actions를 낭독 실행기로 넘긴다.
+리듀스 직후 한 곳에서 이벤트를 내고(speech.final → turn.result → session.updated → 나머지) actions를 낭독 실행기로 넘긴다.
 화면용 timer.tick은 엔진 입력이 아니라 이 서비스의 주기 작업이 낸다(매초 상태가 바뀌지 않게, 계획 결정 C2).
 """
 import asyncio
@@ -24,6 +24,9 @@ from app.services.records import RecordSink, Snapshot
 from app.services.tts import Speaker
 
 log = logging.getLogger(__name__)
+
+# 턴 결과 이벤트는 session.updated보다 먼저, 음성 턴의 알아들은 문장은 turn.result보다 먼저(이벤트 스트림 명세 음성 턴 순서)
+_TURN_EVENTS = ("speech.final", "turn.result")
 
 
 class EngineService:
@@ -205,12 +208,13 @@ class EngineService:
                 log.exception("새 세션 알림 실패: %s", result.state.session_id)
         self._state_changed(before)
         events = result.events
-        for e in (e for e in events if e.type == "turn.result"):
-            self._publish(e.type, result.turn_id, e.data)
+        for type in _TURN_EVENTS:
+            for e in (e for e in events if e.type == type):
+                self._publish(e.type, result.turn_id, e.data)
         changes = session_changes(before, result.state, ctx)
         if changes:
             self._publish("session.updated", result.turn_id, changes)
-        for e in (e for e in events if e.type != "turn.result"):
+        for e in (e for e in events if e.type not in _TURN_EVENTS):
             self._publish(e.type, result.turn_id, e.data)
         self._sync_holds()
         return batch

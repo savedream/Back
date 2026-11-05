@@ -16,6 +16,7 @@ from app.core.parts import Parts
 from app.schemas.function_call import FunctionCall
 from app.schemas.turn import NormalizedText
 from app.schemas.utterance import Utterance
+from app.services.audio_input import AudioSegment
 from app.services.events import EventSink
 from app.services.model_runner import ModelRunner
 from app.services.normalizer import normalize
@@ -23,7 +24,7 @@ from app.services.output_parser import ModelOutputError, parse
 from app.services.procedure_engine.actions import SayAction
 from app.services.procedure_engine.functions import is_progress_phrase
 from app.services.procedure_engine.inputs import (
-    FunctionCallInput, ModelErrorInput, ProgressPhraseInput, SpeechActivityInput,
+    FunctionCallInput, ModelErrorInput, ProgressPhraseInput, SpeechActivityInput, Trigger,
 )
 from app.services.procedure_engine.timers import listen_state
 
@@ -91,22 +92,32 @@ class TurnLock:
     엔진이 그 턴 입력을 처리한 뒤 놓는다. 잡혀 있으면 409 AUDIO_BUSY."""
 
     def __init__(self) -> None:
-        self._busy = False
+        self._owner: str | None = None  # 잠금을 잡은 턴
         self._count = 0
 
     @property
     def busy(self) -> bool:
-        return self._busy
+        return self._owner is not None
+
+    def acquire(self, busy_message: str = "다른 턴을 처리 중입니다") -> str:
+        """잠금을 잡고 그 턴 번호를 돌려준다. 요청 두 개에 걸치는 말하기 버튼 턴(start → stop 뒤 처리)용(결정 D1)."""
+        if self._owner is not None:
+            raise AppError(ErrorCode.AUDIO_BUSY, busy_message)
+        self._owner = self.next_id()
+        return self._owner
+
+    def release(self, turn_id: str) -> None:
+        """그 턴이 잡은 잠금만 놓는다. 주인이 아니면(이미 놓았거나 다른 턴) 아무것도 하지 않는다."""
+        if self._owner == turn_id:
+            self._owner = None
 
     @contextmanager
     def turn(self) -> Iterator[str]:
-        if self._busy:
-            raise AppError(ErrorCode.AUDIO_BUSY, "다른 턴을 처리 중입니다")
-        self._busy = True
+        turn_id = self.acquire()
         try:
-            yield self.next_id()
+            yield turn_id
         finally:
-            self._busy = False
+            self.release(turn_id)
 
     def next_id(self) -> str:
         """잠그지 않고 턴 번호만 하나 매긴다(턴 잠금을 쓰지 않는 세션 초기화용)."""
@@ -130,20 +141,47 @@ class UtteranceReply(BaseModel):
 _LATENCY_KEYS = ("vad_tail", "stt", "normalize", "model", "parse", "engine")
 
 
-async def run_utterance(parts: Parts, model_timeout_s: float, turn_id: str, text: str, speak: bool) -> UtteranceReply:
+async def run_voice_turn(parts: Parts, model_timeout_s: float, segment: AudioSegment, started: float) -> None:
+    """음성 턴: ② STT 뒤 문장 턴과 같은 경로(③부터). 소리가 없으면(빈 문자열) STT_EMPTY, STT가 실패하면 STT_FAILED로
+    모델 없이 엔진에 넣는다(말하지 않고 ui.notice만, 6-4)."""
+    start = time.perf_counter()
+    try:
+        text = (await parts.stt.transcribe(segment)).text
+        stt_error = None if text.strip() else ErrorCode.STT_EMPTY
+    except Exception:
+        log.exception("STT 실패: %s", segment.turn_id)
+        text, stt_error = "", ErrorCode.STT_FAILED
+    await run_utterance(parts, model_timeout_s, segment.turn_id, text, True, started, {"stt": _elapsed_ms(start)},
+                        segment.trigger, stt_error)
+
+
+async def run_utterance(parts: Parts, model_timeout_s: float, turn_id: str, text: str, speak: bool,
+                        started: float | None = None, latency: dict[str, int] | None = None,
+                        trigger: Trigger = "text", stt_error: ErrorCode | None = None) -> UtteranceReply:
     """문장 하나로 한 턴을 처리한다. speak=False면 낭독 대신 바로 끝난 것으로 처리한 뒤(알림 시작 시각까지 반영) 돌려주고,
-    speak=True면 엔진 결과가 나오면 바로 돌려준다(낭독은 기다리지 않음)."""
+    speak=True면 엔진 결과가 나오면 바로 돌려준다(낭독은 기다리지 않음).
+
+    started: 지연(turn.latency e2e)의 t0(time.perf_counter). 없으면 지금(텍스트 턴), 말하기 버튼 턴은 말하기 완료 호출 시각.
+    latency: 이 턴에서 앞서 잰 단계 시간(음성 턴의 stt). trigger: 음성 턴이면 button·vad.
+    stt_error: 인식 실패(STT_EMPTY·STT_FAILED)면 모델을 건너뛰고 해석·인식 실패로 넣는다.
+    """
     engine, sequencer = parts.engine, parts.engine.sequencer
-    started = time.perf_counter()
+    started = time.perf_counter() if started is None else started
     sequencer.set_speech_state("processing")
     # 턴을 처리하는 동안 무응답·대기 타이머를 멈추고 절차 알림은 턴이 끝난 뒤로 미룬다(6-9, 6-12)
     engine.post(SpeechActivityInput(state="started"))
     try:
-        return await _run_turn(parts, model_timeout_s, turn_id, text, speak, started)
+        return await _run_turn(parts, model_timeout_s, turn_id, text, speak, started, dict(latency or {}), trigger,
+                               stt_error)
     except Exception:
-        engine.post(SpeechActivityInput(state="cancelled"))
-        _back_to_listening(parts)  # 실패해도 "처리 중"이 남지 않게
+        abandon_turn(parts)  # 실패해도 "처리 중"이 남지 않게
         raise
+
+
+def abandon_turn(parts: Parts) -> None:
+    """턴을 끝내지 못했을 때: 말소리 받는 중을 풀고(멈춘 타이머를 다시 건다) 듣기 상태로 되돌린다."""
+    parts.engine.post(SpeechActivityInput(state="cancelled"))
+    _back_to_listening(parts)
 
 
 def _back_to_listening(parts: Parts) -> None:
@@ -156,16 +194,20 @@ def _back_to_listening(parts: Parts) -> None:
 
 
 async def _run_turn(parts: Parts, model_timeout_s: float, turn_id: str, text: str, speak: bool,
-                    started: float) -> UtteranceReply:
+                    started: float, latency: dict[str, int], trigger: Trigger,
+                    stt_error: ErrorCode | None) -> UtteranceReply:
     engine = parts.engine
-    latency: dict[str, int] = {}
+    start = time.perf_counter()
     normalized = normalize(text)
-    latency["normalize"] = _elapsed_ms(started)
+    latency["normalize"] = _elapsed_ms(start)
     state = engine.state  # 말소리가 잡힌 시점의 위치를 들고 간다(6-1)
     base = {"turn_id": turn_id, "epoch": state.epoch, "step_id": state.step_id, "text": text,
-            "normalized": normalized.text}
-    raw = function_call = error_code = None
-    if is_progress_phrase(engine.db, state, normalized.text):
+            "normalized": normalized.text, "trigger": trigger}
+    raw = function_call = None
+    error_code = stt_error
+    if stt_error is not None:
+        inp = ModelErrorInput(**base, error_code=stt_error)
+    elif is_progress_phrase(engine.db, state, normalized.text):
         inp = ProgressPhraseInput(**base)  # 대기 단계의 진행 표현은 모델을 건너뛴다(6-8)
     else:
         outcome = await interpret(turn_id, normalized, parts.model, model_timeout_s, latency)
