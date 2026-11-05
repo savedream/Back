@@ -1,4 +1,5 @@
-"""부품 조립: 지금은 가짜 부품(모델·기기·GPS·스피커·녹음기·STT·종료 훅·배터리)으로 엔진을 꾸린다. 실제 부품은 키트 단계에서 같은 자리(Protocol)에 끼운다."""
+"""부품 조립: 가짜 부품(모델·기기·GPS·스피커·녹음기·STT·종료 훅·배터리)으로 엔진을 꾸린다. 모델은 PC용 실제 모델도 고를 수 있고
+(fake_model=false), 나머지 실제 부품은 키트 단계에서 같은 자리(Protocol)에 끼운다."""
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -12,12 +13,18 @@ from app.fakes.fake_system import FakeBattery, FakeShutdown
 from app.schemas.record import Record
 from app.services.events import EventBus
 from app.services.manual_db import ManualDB
+from app.services.model_runner import ModelRunner
 from app.services.procedure_engine.clock import Clock
 from app.services.procedure_engine.inputs import LocationUpdateInput
 from app.services.procedure_engine.service import EngineService
 from app.services.records import Snapshot, SqliteRecordStore
 
-_FAKE_FLAGS = ("fake_model", "fake_devices", "fake_audio", "fake_gps")
+try:
+    from app.services.hf_model import HfModelRunner
+except ImportError:  # torch·transformers가 없으면(pip install -e '.[model]' 전) 가짜 모델만 쓸 수 있다
+    HfModelRunner = None
+
+_FAKE_FLAGS = ("fake_devices", "fake_audio", "fake_gps")  # 실제 부품이 아직 없는 것
 
 
 @dataclass
@@ -28,7 +35,7 @@ class Parts:
     devices: FakeDevices
     gps: FakeGps
     speaker: FakeSpeaker
-    model: FakeModel
+    model: ModelRunner
     engine: EngineService
     recorder: FakeRecorder
     stt: FakeStt
@@ -66,10 +73,20 @@ def read_boot_id(path: Path) -> str | None:
         return None
 
 
+def _real_model(settings: Settings) -> ModelRunner:
+    """PC용 실제 모델 실행기. 적재·예열은 서버를 켠 뒤 백그라운드로 한다(app/main.py)."""
+    if HfModelRunner is None:
+        raise RuntimeError("실제 모델을 쓰려면 torch·transformers가 필요함: pip install -e '.[model]'")
+    if settings.model_dir is None or not settings.model_dir.is_dir():
+        raise RuntimeError(f"fake_model=false면 실제 모델 폴더가 필요함(SALYEO_MODEL_DIR): {settings.model_dir}")
+    return HfModelRunner(settings.model_dir)
+
+
 def build_parts(settings: Settings, db: ManualDB, clock: Clock) -> Parts:
     real = [name for name in _FAKE_FLAGS if not getattr(settings, name)]
     if real:
         raise RuntimeError(f"실제 부품은 아직 없음: {', '.join(f'{n}=false' for n in real)}")
+    model = FakeModel() if settings.fake_model else _real_model(settings)
     events = EventBus(clock)
     boot_id = read_boot_id(settings.boot_id_path)
     records = SqliteRecordStore(settings.records_db_path, clock, events, retry_base_s=settings.record_retry_base_s,
@@ -87,6 +104,6 @@ def build_parts(settings: Settings, db: ManualDB, clock: Clock) -> Parts:
     # GPS 재시도 중 위치가 잡히면 엔진이 T_GPS_OK를 읽는다(6-11)
     gps.listeners.append(lambda loc: engine.post(LocationUpdateInput(location=loc)))
     # 가짜 종료 훅은 꺼짐 요청만 표시하고 엔진 동결을 풀어 서버를 계속 쓸 수 있게 한다(화면 개발용)
-    return Parts(clock, events, records, devices, gps, speaker, FakeModel(), engine, FakeRecorder(),
+    return Parts(clock, events, records, devices, gps, speaker, model, engine, FakeRecorder(),
                  FakeStt(settings.fake_stt_text), FakeShutdown(engine.unfreeze), FakeBattery(), boot_id,
                  settings.resume_from_snapshot)

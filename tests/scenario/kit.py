@@ -26,6 +26,8 @@ class Kit:
     async def __aenter__(self) -> "Kit":
         self._lifespan = self.app.router.lifespan_context(self.app)
         await self._lifespan.__aenter__()
+        if self.app.state.model_loading is not None:
+            await self.app.state.model_loading  # 실제 모델(SALYEO_FAKE_MODEL=false)이면 적재·예열이 끝나기를 기다린다
         self.parts = self.app.state.parts
         self._sub = self.parts.events.subscribe(maxsize=0)  # 0: 크기 제한 없음
         # 처리 못 한 예외도 앱의 500 응답으로 받는다(명세 공통 오류)
