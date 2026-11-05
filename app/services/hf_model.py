@@ -10,7 +10,7 @@ from pathlib import Path
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from app.services.model_runner import MAX_NEW_TOKENS, WARMUP_TEXT, OneAtATime, build_prompt, clean_output
+from app.services.model_runner import MAUM_END, MAX_NEW_TOKENS, WARMUP_TEXT, OneAtATime, build_prompt, clean_output
 
 
 class HfModelRunner:
@@ -21,6 +21,7 @@ class HfModelRunner:
         self._device = "mps" if torch.backends.mps.is_available() else "cpu"
         self._tokenizer = None
         self._model = None
+        self._stop_ids: list[int] = []
 
     async def load(self) -> None:
         """모델 적재(수 초). 서버를 켠 뒤 백그라운드로 부른다."""
@@ -37,6 +38,7 @@ class HfModelRunner:
     async def close(self) -> None:
         """서버를 끌 때 모델을 내려놓는다(같은 프로세스에서 앱을 여러 번 만드는 시험에서 맥 GPU 메모리가 쌓이지 않게)."""
         await self._worker.call(self._unload)
+        self._worker.close()
 
     def _unload(self) -> None:
         self._model = self._tokenizer = None
@@ -49,12 +51,15 @@ class HfModelRunner:
         dtype = torch.float32 if self._device == "cpu" else torch.float16
         self._tokenizer = AutoTokenizer.from_pretrained(self.model_dir)
         self._model = AutoModelForCausalLM.from_pretrained(self.model_dir, dtype=dtype).to(self._device).eval()
+        # 멈춤 토큰은 generation_config.json에 기대지 않고 직접 준다(그 파일이 없어도 <maum_end>에서 멈추게)
+        self._stop_ids = [self._tokenizer.convert_tokens_to_ids(MAUM_END), self._tokenizer.eos_token_id]
 
     def _generate(self, text: str) -> str:
         # 토크나이저가 BOS를 붙인다(학습 때 chat_template과 같은 입력). 탐욕 디코딩, <maum_end>·<|eot_id|>에서 멈춤
         inputs = self._tokenizer(build_prompt(text), return_tensors="pt").to(self._device)
         with torch.no_grad():
-            out = self._model.generate(**inputs, max_new_tokens=MAX_NEW_TOKENS, do_sample=False)
+            out = self._model.generate(**inputs, max_new_tokens=MAX_NEW_TOKENS, do_sample=False,
+                                       eos_token_id=self._stop_ids, pad_token_id=self._tokenizer.pad_token_id)
         generated = out[0, inputs["input_ids"].shape[1]:]
         # 공백 정리(clean_up_tokenization_spaces)는 BPE 출력의 문장부호 앞 공백을 지울 수 있어 끈다
         return clean_output(self._tokenizer.decode(generated, skip_special_tokens=False,
