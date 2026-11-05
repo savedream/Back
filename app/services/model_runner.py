@@ -1,7 +1,8 @@
 """④ 모델 추론 (명세서 내부 모듈 계약 ④).
 
-지금은 가짜 모델(app/fakes/fake_model.py)만 있다. 실제 모델(Llama-3.2-1B + LoRA)은 같은 Protocol로 끼우고,
-프롬프트·출력 정리·한 번에 하나씩 돌리기는 실행기마다 여기 것을 같이 쓴다.
+가짜 모델(app/fakes/fake_model.py)과 PC 개발용 실제 모델(app/services/hf_model.py, Llama-3.2-1B + LoRA를 합친 모델)이
+같은 Protocol을 따른다. 키트(NPU)용 실행기도 키트 단계에서 같은 자리에 끼우고, 프롬프트·출력 정리·한 번에 하나씩
+돌리기는 실행기마다 여기 것을 같이 쓴다.
 """
 import asyncio
 from collections.abc import Callable
@@ -15,6 +16,7 @@ PROMPT = ("Below is the query from the users, please choose the correct function
           "the function. Query: {text} Response:")
 MAX_NEW_TOKENS = 64  # 명세 ④ 생성 설정
 EOT_TEXT = "<|eot_id|>"  # <maum_end> 말고 생성을 멈추는 다른 토큰(generation_config의 eos). 출력에서는 지운다
+WARMUP_TEXT = "다시 말해 줘"  # 기동 때 예열 추론에 넣는 문장(결과는 쓰지 않음)
 
 
 class ModelRunner(Protocol):
