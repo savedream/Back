@@ -9,7 +9,7 @@ import pytest
 from app.schemas.device import DeviceCommand
 from app.schemas.session import SessionState
 from app.services.procedure_engine.core import new_session, recover, resume_session
-from app.services.procedure_engine.inputs import CaptureInput, DeviceButtonInput, PlaybackInput
+from app.services.procedure_engine.inputs import CaptureInput, DeviceButtonInput, PlaybackInput, ShutdownInput
 from app.services.procedure_engine.timers import hold_reason
 from tests.unit.engine_kit import EngineKit, ids
 
@@ -241,3 +241,27 @@ def test_volume_status_changed_only_when_volume_changes(kit):
     assert kit.state.volume == 100
     changed = [e.data for e in kit.events if e.type == "status.changed"]
     assert changed == [{"speaker": {"volume": v}} for v in (80, 90, 100)]
+
+
+def test_shutdown_cuts_guidance_and_turns_sound_off(kit):
+    """키트 끄기(ShutdownInput, AC-D1): 남은 안내를 끊고(replace) 아무것도 읽지 않으며 켜 둔 메트로놈·구조신호를 끈다.
+    위치·타이머·알림은 그대로 둔다."""
+    at_s5b(kit)
+    kit.feed(button(4, 1))
+    assert {d.status for d in kit.state.devices.values()} == {"on"}
+    kit.hold()
+    kit.say("다시 말해 줘")  # 읽는 중인 안내
+    spoken, devices = len(kit.spoken), len(kit.devices)
+    result = kit.feed(ShutdownInput(turn_id="t_off"))
+    assert result.mode == "replace" and kit.spoken[spoken:] == []
+    assert result.state.pending_says and all(p.dropped for p in result.state.pending_says.values())
+    assert [(c.object, c.type, c.source) for c in kit.devices[devices:]] == [(2, 2, "engine"), (4, 2, "engine")]
+    assert {d.status for d in kit.state.devices.values()} == {"off"}
+    assert (kit.state.step_id, kit.state.timer.status, [a.step_id for a in kit.state.alerts]) == (
+        "EM01-15", "running", ["EM01-09"])
+
+
+def test_shutdown_with_sound_off_sends_no_command(kit):
+    devices = len(kit.devices)
+    result = kit.feed(ShutdownInput(turn_id="t_off"))
+    assert result.actions == [] and kit.devices[devices:] == []

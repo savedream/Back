@@ -160,6 +160,25 @@ async def test_close_flushes_queued_writes(rig):
     assert await asyncio.gather(*tasks) == [True, True, True]
 
 
+async def test_flush_waits_for_queued_writes_and_their_results(rig):
+    """flush는 앞서 넣은 쓰기가 끝나고 결과(저장·미저장)가 메모리에 반영된 뒤 돌아오며, 저장소는 그대로 열려 있다(키트 끄기)."""
+    release = threading.Event()
+    blocker = asyncio.ensure_future(rig.store.run(lambda conn: release.wait(2)))  # 쓰기 스레드를 붙잡는다
+    rig.store.fail_next_save("user_report")
+    tasks = [asyncio.create_task(rig.store.save(_record(n))) for n in (1, 2)]
+    session = rig.store.save_session("s_1", None, "2026-10-13T14:00:00+09:00")
+    await asyncio.sleep(0)  # 두 기록이 쓰기 큐에 들어간다
+    flushed = asyncio.ensure_future(rig.store.flush())
+    await asyncio.sleep(0.02)
+    assert not flushed.done()
+    release.set()
+    await flushed
+    assert blocker.done() and session.done() and all(t.done() for t in tasks)
+    assert [r.record_id for r in rig.store.unsaved()] == ["r_0001"] and rig.store.records[1].saved is True
+    assert [row[0] for row in rig.rows()] == ["r_0002"] and rig.sessions() == ["s_1"]
+    assert await rig.store.save(_record(3)) is True
+
+
 async def test_writes_run_on_writer_thread_without_blocking_loop(rig):
     release, threads = threading.Event(), []
 

@@ -2,10 +2,12 @@
 
 리듀스 직후 한 곳에서 이벤트를 내고(speech.final → turn.result → session.updated → 나머지) actions를 낭독 실행기로 넘긴다.
 화면용 timer.tick은 엔진 입력이 아니라 이 서비스의 주기 작업이 낸다(매초 상태가 바뀌지 않게, 계획 결정 C2).
+키트를 끄는 동안(동결)에는 마감 처리·위치 갱신·timer.tick을 미룬다(POST /api/system/shutdown).
 """
 import asyncio
 import logging
 from collections.abc import Callable
+from typing import Literal
 
 from app.schemas.device import Location
 from app.schemas.session import SessionState
@@ -43,6 +45,8 @@ class EngineService:
         self._session_ids = session_ids  # 이미 쓴 세션 ID(세션 표)
         self._on_state = on_state  # 상태가 바뀌면 부른다. 상태 스냅샷(6-14)을 저장하는 데 쓴다
         self.state: SessionState | None = None
+        # 기록에 남기는 시계 출처(Record.clock). GPS·RTC로 시각을 맞추는 일은 키트 단계라 지금은 늘 unsynced
+        self.clock_source: Literal["gps", "rtc", "unsynced"] = "unsynced"
         self._devices = devices
         self._held: set[int] = set()  # 음소거 관문을 닫아 둔 소리 기능(object)
         self.sequencer = Sequencer(db, events, speaker, devices, records, self.submit, lambda: self.state, clock,
@@ -53,6 +57,9 @@ class EngineService:
         self._task: asyncio.Task | None = None
         self._ticker: asyncio.Task | None = None  # timer.tick 주기 작업
         self._timer_changed = asyncio.Event()  # 타이머 상태가 바뀌면 주기 작업을 깨운다
+        self._thawed = asyncio.Event()  # 동결(키트를 끄는 중)이 아님. freeze()가 끄고 unfreeze()가 켠다
+        self._thawed.set()
+        self._deferred: list[tuple[EngineInput, bool, asyncio.Future]] = []  # 동결 중 미룬 위치 갱신
 
     async def start(self, previous_session_id: str | None = None, snapshot: Snapshot | None = None) -> None:
         """엔진 태스크를 띄운다. 준비가 끝난 뒤에 부른다. snapshot이 있으면 그 세션을 이어 가고(T_RESUME, 6-14),
@@ -89,6 +96,26 @@ class EngineService:
         deadline = self._deadline()
         return self._pending == 0 and not (deadline is not None and deadline <= self.clock.now())
 
+    @property
+    def frozen(self) -> bool:
+        """키트를 끄는 중(동결)."""
+        return not self._thawed.is_set()
+
+    def freeze(self) -> None:
+        """키트를 끄는 동안 새 일을 멈춘다: 마감 처리(절차 알림·무응답·대기·확인 질문·GPS 재시도 끝)와 위치 갱신(늦게 잡힌
+        좌표 낭독)을 미루고 timer.tick을 내지 않는다. 되먹임·종료 입력처럼 넣은 다른 입력은 그대로 처리한다."""
+        self._thawed.clear()
+        self._timer_changed.set()
+
+    def unfreeze(self) -> None:
+        """동결을 풀고 미룬 위치 갱신과 그사이 지난 마감을 처리한다(저장 실패, 가짜 종료 훅)."""
+        self._thawed.set()
+        self._timer_changed.set()
+        for item in self._deferred:
+            self._pending += 1
+            self._queue.put_nowait(item)
+        self._deferred.clear()
+
     def put(self, inp: EngineInput, speak: bool = True) -> "asyncio.Future[tuple[EngineResult, Batch]]":
         future = asyncio.get_running_loop().create_future()
         self._pending += 1
@@ -108,10 +135,10 @@ class EngineService:
 
     def _ctx(self) -> Ctx:
         return Ctx(db=self.db, now=self.clock.now(), wall=self.clock.wall(), location=self._location(),
-                   session_ids=self._session_ids())
+                   clock_source=self.clock_source, session_ids=self._session_ids())
 
     def _deadline(self) -> float | None:
-        if self.state is None:
+        if self.state is None or self.frozen:
             return None
         live = deadlines(self.state)
         self._skipped &= set(live)
@@ -129,6 +156,8 @@ class EngineService:
             waiters = {getter}
             if deadline is not None:
                 waiters.add(asyncio.ensure_future(self.clock.sleep_until(deadline)))
+            elif self.frozen:
+                waiters.add(asyncio.ensure_future(self._thawed.wait()))  # 풀리면 그사이 지난 마감을 본다
             try:
                 await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
             finally:
@@ -138,17 +167,20 @@ class EngineService:
             if getter.done() and not getter.cancelled():
                 inp, speak, future = getter.result()
                 try:
-                    self._step(inp, speak, future)
+                    if self.frozen and inp.kind == "location_update":
+                        self._deferred.append((inp, speak, future))  # 풀리면 다시 넣는다(그때 위치를 읽는다)
+                    else:
+                        self._step(inp, speak, future)
                 finally:
                     self._pending -= 1
 
     async def _tick_timer(self) -> None:
         """타이머가 도는 동안 경과 시간이 정수 초를 넘을 때마다 timer.tick(AC-E6). 늦게 깨어나도 밀린 tick을 몰아 내지 않고
-        한 번만 낸 뒤 다음 정수 초에 맞춘다. 돌지 않으면 타이머가 바뀔 때까지 잔다."""
+        한 번만 낸 뒤 다음 정수 초에 맞춘다. 돌지 않거나 동결 중이면 타이머가 바뀌거나 동결이 풀릴 때까지 잔다."""
         while True:
             self._timer_changed.clear()
             timer = self.state.timer if self.state is not None else None
-            if timer is None or timer.status != "running":
+            if timer is None or timer.status != "running" or self.frozen:
                 await self._timer_changed.wait()
                 continue
             target = timer.elapsed_s(self.clock.now()) + 1  # 다음 정수 초(이번 측정 구간 시작 시각 기준)

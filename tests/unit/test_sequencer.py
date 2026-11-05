@@ -250,3 +250,16 @@ async def test_stop_cancels_unanswered_device_call():
     pending = set(r.seq._side)
     await r.seq.stop()
     assert pending and all(t.done() for t in pending)
+
+
+async def test_drain_waits_for_device_answers_and_record_saves(rig):
+    """drain은 남은 액션과 기다리는 장치 응답·기록 저장이 모두 끝나야 돌아온다(키트 끄기 전, 계획 PR③)."""
+    rig.devices.hang = True  # 응답하지 않으면 장치 응답 제한 시간까지 기다린다
+    rig.submit(result(say(1), device(2), record(3, wants_result=True)))
+    drained = asyncio.ensure_future(rig.seq.drain())
+    for _ in range(20):
+        await asyncio.sleep(0)
+    assert not drained.done() and [r.record_id for r in rig.records.records] == ["r_3"]
+    rig.clock.advance(2)
+    await drained
+    assert rig.seq.idle and [type(i).__name__ for i in rig.fed[-2:]] == ["RecordSavedInput", "DeviceResultInput"]

@@ -47,3 +47,12 @@ def test_health_ready_when_all_components_done(app, client):
     assert client.get("/api/health").json()["data"]["ready"] is False
     readiness.mark_ready(components[-1])
     assert client.get("/api/health").json()["data"]["ready"] is True
+
+
+def test_is_ready_per_component(app, client):
+    """부품별 준비 여부(GET /api/devices의 models·manual_db). 매뉴얼 DB는 서버를 켤 때 적재한다."""
+    readiness = app.state.readiness
+    assert readiness.is_ready(Component.MANUAL_DB) and not readiness.is_ready(Component.LLM)
+    readiness.mark_ready(Component.LLM)
+    assert readiness.is_ready(Component.LLM) and not readiness.is_ready(Component.LLM_WARMUP)
+    assert readiness.ready is False

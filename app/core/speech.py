@@ -78,6 +78,20 @@ class SpeechCapture:
         self._arm()
         return turn_id
 
+    def cancel(self) -> None:
+        """녹음 중이면 인식 없이 버리고 턴 잠금을 놓는다(키트 끄기의 마이크 끄기). 녹음을 끝내고 처리 중인 턴은 그대로 두고,
+        마이크 일시정지 설정(mic.paused)은 건드리지 않는다."""
+        turn_id = self.turn_id
+        if turn_id is None:
+            return
+        self.turn_id = None
+        self._cancel_expiry()
+        parts = self._parts
+        parts.recorder.discard()
+        parts.engine.post(CaptureInput(state="ended"))
+        abandon_turn(parts)  # 멈춘 무응답·대기 타이머를 다시 걸고 듣기 상태로 되돌린다
+        self._lock.release(turn_id)
+
     async def close(self) -> None:
         """앱을 끌 때: 녹음 중이면 버리고 최대 녹음 시간·처리 태스크를 취소한다."""
         if self.turn_id is not None:

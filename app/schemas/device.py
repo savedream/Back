@@ -47,7 +47,6 @@ class PendingStart(BaseModel):
     action_id: str  # 확인 문장 say 액션
     source: Literal["voice", "button"]
     turn_id: str | None
-    step_id: str | None = None  # 기록의 step_id(엔진 출처일 때만 단계라 음성·버튼 요청은 None)
 
 
 class TimerState(BaseModel):

@@ -422,3 +422,44 @@ async def test_engine_stop_cancels_ticker():
     await running_timer(kit)
     await kit.stop()
     assert kit.engine._ticker.cancelled()
+
+
+async def test_freeze_holds_deadlines_until_unfreeze(kit):
+    """키트를 끄는 동안(동결) 지난 마감(무응답·절차 알림)을 처리하지 않고, 풀리면 그사이 지난 마감을 처리한다."""
+    await at_s5b(kit)
+    kit.engine.freeze()
+    assert await kit.advance(120) == []  # 2분 알림 마감이 지났지만 그대로(settle도 끝난다)
+    assert [a.step_id for a in kit.state.alerts] == ["EM01-09"]
+    kit.engine.unfreeze()
+    await kit.settle()
+    assert ids(kit.spoken[-2:]) == [("step", "EM01-10"), ("step", "EM01-11")]
+
+
+async def test_freeze_defers_location_update():
+    """동결 중 늦게 잡힌 위치(LocationUpdateInput)는 읽지 않고 미뤘다가 풀리면 읽는다(6-11)."""
+    kit = ShellKit(location=Location(fix=False))
+    await kit.start()
+    try:
+        await kit.say("사람이 쓰러졌는데 숨을 안 쉬어")
+        assert ("template", "T_GPS_WAIT") in ids(await kit.say("아니요 대답 없어요"))
+        kit.engine.freeze()
+        kit.location = FIX
+        mark = len(kit.spoken)
+        kit.engine.post(LocationUpdateInput(location=FIX))
+        await kit.settle()
+        assert kit.spoken[mark:] == [] and kit.state.gps_retry is not None
+        kit.engine.unfreeze()
+        await kit.settle()
+        assert ids(kit.spoken[mark:]) == [("template", "T_GPS_OK")] and kit.state.gps_retry is None
+    finally:
+        await kit.stop()
+
+
+async def test_no_tick_while_frozen(kit):
+    """동결 중에는 timer.tick을 내지 않고(타이머는 그대로 잰다), 풀리면 다음 정수 초부터 다시 낸다."""
+    await running_timer(kit)
+    kit.engine.freeze()
+    assert await ticks(kit, 3) == []
+    kit.engine.unfreeze()
+    assert await ticks(kit, 0) == []  # 주기 작업이 깨어나 다음 정수 초에 맞춘다
+    assert [d["elapsed_s"] for d in await ticks(kit, 1)] == [4]

@@ -133,6 +133,13 @@ class SessionResetInput(BaseModel):
     turn_id: str
 
 
+class ShutdownInput(BaseModel):
+    """키트 끄기(POST /api/system/shutdown): 남은 안내를 끊고 켜 둔 메트로놈·구조신호를 끈다."""
+
+    kind: Literal["shutdown"] = "shutdown"
+    turn_id: str
+
+
 EngineInput = Annotated[
     FunctionCallInput
     | ModelErrorInput
@@ -149,6 +156,7 @@ EngineInput = Annotated[
     | CaptureInput
     | MicInput
     | TickInput
-    | SessionResetInput,
+    | SessionResetInput
+    | ShutdownInput,
     Field(discriminator="kind"),
 ]

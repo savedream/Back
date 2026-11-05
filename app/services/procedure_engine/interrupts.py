@@ -187,16 +187,17 @@ def _continue_deferred(run: Run, fc: FunctionCall | None) -> bool:
 
 
 def cancel_timer_start(run: Run) -> None:
-    """확인 문장 뒤로 미룬 타이머 시작·재개를 취소한다(그 전에 일시정지·초기화가 옴). 그 요청은 cancelled로 남긴다."""
+    """확인 문장 뒤로 미룬 타이머 시작·재개가 있으면 취소한다(그 전에 일시정지·초기화가 옴). 그 요청은 cancelled로 남긴다."""
     pending, run.s.timer.starts_after = run.s.timer.starts_after, None
+    if pending is None:
+        return
     run.record(DeviceResultRecord(**{**run.record_base(), "turn_id": pending.turn_id}, object=3, type=1,
-                                  source=pending.source, result="cancelled", step_id=pending.step_id))
+                                  source=pending.source, result="cancelled"))
 
 
 # 타이머 초기화: 현재 측정 구간을 기록에 저장한 뒤 초기화(저장 결과는 RecordSaved로 돌아온다)
 def save_timer_record(run: Run, source: str, origin_step_id: str | None) -> None:
-    if run.s.timer.starts_after is not None:
-        cancel_timer_start(run)  # 미뤄 둔 재개는 하지 않고 지금 구간으로 초기화한다
+    cancel_timer_start(run)  # 미뤄 둔 재개는 하지 않고 지금 구간으로 초기화한다
     elapsed = run.s.timer.elapsed_s(run.ctx.now)
     run.s.timer_reset_record = run.record(DeviceResultRecord(
         **run.record_base(), object=3, type=4, source=source, result="success", detail={"elapsed_s": elapsed}),

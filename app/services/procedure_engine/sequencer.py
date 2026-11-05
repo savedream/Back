@@ -72,6 +72,7 @@ class Sequencer:
         self._playing: asyncio.Task | None = None
         self._side: set[asyncio.Future] = set()  # 응답을 기다리는 장치 명령·기록 저장
         self._wake = asyncio.Event()
+        self._quiet = asyncio.Event()  # 쉬게 되면(idle) 켠다. drain()이 기다린다
         self._shown_step: str | None = None
         self._speech: dict | None = None
         self._task: asyncio.Task | None = None
@@ -88,6 +89,13 @@ class Sequencer:
     @property
     def idle(self) -> bool:
         return not self._queue and self._current is None and not self._side
+
+    async def drain(self) -> None:
+        """남은 액션과 기다리는 장치 응답·기록 저장이 모두 끝날 때까지 기다린다. 되먹임으로 이어진 액션(끊긴 문장 기록, 장치
+        결과 기록)까지 포함한다(키트 끄기 전)."""
+        while not self.idle:
+            self._quiet.clear()
+            await self._quiet.wait()
 
     @property
     def reading(self) -> bool:
@@ -128,6 +136,8 @@ class Sequencer:
             if not self._queue:
                 if self._speech == {"state": "speaking"}:
                     self.set_speech_state(**listen_state(self._state()))
+                if self.idle:
+                    self._quiet.set()
                 self._wake.clear()
                 await self._wake.wait()
                 continue
@@ -243,5 +253,7 @@ class Sequencer:
 
     def _side_done(self, task: asyncio.Task) -> None:
         self._side.discard(task)
+        if self.idle:
+            self._quiet.set()
         if not task.cancelled() and task.exception() is not None:
             log.error("되먹임 처리 실패", exc_info=task.exception())

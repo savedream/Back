@@ -49,6 +49,8 @@ def reduce(state: SessionState, inp: EngineInput, ctx: Ctx) -> EngineResult:
         timers.handle_tick(run)
     elif kind == "barge_in":
         _barge_in(run)
+    elif kind == "shutdown":
+        _shut_down(run)
     elif kind == "session_reset":
         return new_session(ctx, previous=state, turn_id=inp.turn_id)
     else:
@@ -91,6 +93,14 @@ def _barge_in(run: Run) -> None:
     """
     run.preempt()
     _back_to_unspoken(run)
+
+
+def _shut_down(run: Run) -> None:
+    """키트 끄기: 남은 안내를 끊고(replace, 아무것도 읽지 않음) 켜 둔 메트로놈·구조신호를 끈다. 위치·타이머·알림은 그대로
+    둔다(가짜 종료 훅이 동결을 풀면 이어 간다)."""
+    run.preempt()
+    for name in ("metronome", "rescue_signal"):
+        set_sound_device(run, name, on=False, source="engine")
 
 
 def _back_to_unspoken(run: Run) -> str | None:
@@ -144,8 +154,7 @@ def resume_session(state: SessionState, ctx: Ctx, saved_now: float, downtime_s: 
     뺀 만큼으로 옮긴다. 끊긴 동안 끝난 알림은 마감이 이미 지나 다음 Tick에서 바로 처리된다. 읽던 문장·말소리·확인 질문·
     응답을 기다리던 장치 명령·안내 중과 녹음 중 표시·대기(queued)와 멈춤(held_by) 표시와 무응답·대기 마감은
     버리고(다시 읽으면 sync_timers가 다시 건다), 켜져 있던 메트로놈·구조신호는 다시 켠다(재연결 때 자동으로 울리지
-    않는 규칙의 예외). T_RESUME 뒤에, 다 읽지 못한 단계 문장이
-    있었으면 말하기 버튼처럼 그 첫 단계로 되돌려 거기부터 읽고, 없으면 현재 단계를 다시 읽는다.
+    않는 규칙의 예외). T_RESUME 뒤에, 다 읽지 못한 단계 문장이 있었으면 말하기 버튼처럼 그 첫 단계로 되돌려 거기부터 읽고, 없으면 현재 단계를 다시 읽는다.
     안내 시작 전(현재 단계 없음, idle)이면 T_RESUME 대신 T_WELCOME을 읽는다.
     """
     run = Run(state, ctx, None)
