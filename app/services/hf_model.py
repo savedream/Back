@@ -4,6 +4,7 @@
 그대로 읽는다. 키트(NPU, W8A16)에서는 같은 ModelRunner 자리에 키트용 실행기를 끼운다.
 설치: pip install -e '.[model]'
 """
+import gc
 from pathlib import Path
 
 import torch
@@ -32,6 +33,16 @@ class HfModelRunner:
     async def run(self, text: str) -> str:
         self.calls += 1
         return await self._worker.call(self._generate, text)
+
+    async def close(self) -> None:
+        """서버를 끌 때 모델을 내려놓는다(같은 프로세스에서 앱을 여러 번 만드는 시험에서 맥 GPU 메모리가 쌓이지 않게)."""
+        await self._worker.call(self._unload)
+
+    def _unload(self) -> None:
+        self._model = self._tokenizer = None
+        gc.collect()
+        if self._device == "mps":
+            torch.mps.empty_cache()
 
     def _load(self) -> None:
         # CPU는 float16 계산이 느리거나 안 되는 연산이 있어 float32로 읽는다

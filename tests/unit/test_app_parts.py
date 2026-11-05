@@ -58,6 +58,7 @@ class LoadingModel(FakeModel):
         self.loaded = asyncio.Event()
         self.fail = fail
         self.warmed = False
+        self.closed = False
 
     async def load(self) -> None:
         await self.loaded.wait()
@@ -66,6 +67,9 @@ class LoadingModel(FakeModel):
 
     async def warm_up(self) -> None:
         self.warmed = True
+
+    async def close(self) -> None:
+        self.closed = True
 
 
 def real_model_app(monkeypatch, tmp_path, model: LoadingModel):
@@ -85,6 +89,7 @@ async def test_real_model_loads_after_start_then_engine_welcomes(monkeypatch, tm
         await app.state.model_loading
         assert model.warmed and readiness.ready
         assert parts.engine.state.session_id.startswith("s_")
+    assert model.closed  # 끌 때 모델을 내려놓는다
 
 
 async def test_real_model_load_failure_stays_not_ready(monkeypatch, tmp_path):
@@ -99,10 +104,11 @@ async def test_real_model_load_failure_stays_not_ready(monkeypatch, tmp_path):
 
 async def test_shutdown_while_model_loading(monkeypatch, tmp_path):
     """적재가 끝나기 전에 서버를 꺼도 멈추지 않는다."""
-    app = real_model_app(monkeypatch, tmp_path, LoadingModel())
+    model = LoadingModel()
+    app = real_model_app(monkeypatch, tmp_path, model)
     async with app.router.lifespan_context(app):
         loading = app.state.model_loading
-    assert loading.cancelled()
+    assert loading.cancelled() and model.closed
 
 
 async def test_new_sessions_and_records_are_saved_to_sqlite():
