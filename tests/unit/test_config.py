@@ -18,7 +18,7 @@ def test_defaults():
     assert s.model_timeout_s == 5
     assert s.post_tts_guard_ms == 300
     assert s.device_timeout_s == 2
-    assert s.prompt_prefix_im_start is False
+    assert s.model_dir is None  # 가짜 모델이 기본이라 실제 모델 폴더는 없다
     assert s.manual_db_path.name == "manual_db.json"
     assert s.manual_db_path.exists()
     assert all([s.fake_model, s.fake_devices, s.fake_audio, s.fake_gps, s.fake_auto_ready])

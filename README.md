@@ -42,9 +42,22 @@ pip install -e ".[dev]"
 | `python -m app.run` | 개발 서버 실행 (host·port는 `SALYEO_HOST`·`SALYEO_PORT`, 기본 127.0.0.1:8000) |
 | `pytest -q` | 테스트 |
 | `python tools/check_manual_db.py` | 매뉴얼 DB 검사 |
+| `python tools/check_model.py [모델 폴더]` | 실제 모델 출력을 가짜 모델 표와 비교 |
 
 설정값은 `SALYEO_` 접두사 환경변수로 바꿀 수 있습니다 (예: `SALYEO_PORT=9000`).
 `uvicorn app.main:app`으로도 뜨지만, 그때는 이벤트 스트림(`/api/events`)을 연 채 끄면 `--timeout-graceful-shutdown`까지(안 주면 끝없이) 기다립니다.
+
+#### 실제 모델로 실행 (PC)
+
+기본은 가짜 모델(정해 둔 문장 표)입니다. 받은 모델 폴더(`config.json`, `model.safetensors`, `tokenizer.json`, `tokenizer_config.json`, `generation_config.json`)를 저장소 밖에 두고 실행합니다.
+
+```bash
+pip install -e ".[dev,model]"
+SALYEO_FAKE_MODEL=false SALYEO_MODEL_DIR=../models/maum python -m app.run
+```
+
+서버를 켠 뒤 모델 적재와 예열 추론이 끝나야 `/api/health`가 `ready: true`가 됩니다(맥에서 약 8초). 맥 GPU(MPS)가 있으면 쓰고, 없으면 CPU입니다(CPU는 문장 하나에 2~6초라 모델 시간 제한 5초에 걸릴 수 있습니다).
+같은 환경변수를 주고 `pytest tests/scenario`를 돌리면 시나리오 시험을 실제 모델로 돌립니다.
 
 ---
 

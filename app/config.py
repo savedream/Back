@@ -51,11 +51,10 @@ class Settings(BaseSettings):
     record_retry_base_s: float = 1
     record_retry_max_s: float = 60
 
-    # 모델 프롬프트 앞에 <|im_start|>를 붙일지. TODO(미정: 모델 팀 확인)
-    prompt_prefix_im_start: bool = False
-
     # 가짜 모드: 하드웨어·모델 없이 개발하고 테스트할 때 부품마다 가짜를 쓴다
     fake_model: bool = True
+    # 실제 모델 폴더(fake_model=false일 때, transformers 형식: config.json·model.safetensors·tokenizer*.json)
+    model_dir: Path | None = None
     fake_devices: bool = True
     fake_audio: bool = True
     fake_gps: bool = True

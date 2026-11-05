@@ -3,7 +3,10 @@
 실행: python -m app.run (app/run.py, 워커 1개, reload 없이. host·port는 SALYEO_HOST·SALYEO_PORT)
 uvicorn app.main:app으로도 뜨지만, 그때는 스트림을 연 채 끄면 --timeout-graceful-shutdown까지(안 주면 끝없이) 기다린다.
 """
-from contextlib import asynccontextmanager
+import asyncio
+import logging
+from contextlib import asynccontextmanager, suppress
+from typing import cast
 
 from fastapi import APIRouter, FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -12,12 +15,29 @@ from app.api import device_status, devices, events, location, manuals, mic, reco
 from app.common.handlers import install_error_handlers
 from app.config import Settings, get_settings
 from app.core.device_status import DeviceStatus
-from app.core.parts import build_parts
+from app.core.parts import Parts, build_parts
 from app.core.readiness import Component, Readiness
 from app.core.speech import SpeechCapture
 from app.core.turn import TurnLock
 from app.services.manual_db import load_manual_db
+from app.services.model_runner import LoadedModel
 from app.services.procedure_engine.clock import Clock, SystemClock
+
+log = logging.getLogger(__name__)
+
+
+async def _prepare_model(model: LoadedModel, parts: Parts, readiness: Readiness) -> None:
+    """실제 모델 적재 → LLM, 예열 추론 1회 → LLM_WARMUP(명세 ④ 예열). 다른 부품도 준비됐으면 예열 표시 전에 엔진을
+    시작한다(ready: true가 되는 순간 엔진이 있어야 하므로). 하나라도 실패하면 로그만 남기고 준비 전(503 NOT_READY)으로 둔다."""
+    try:
+        await model.load()
+        readiness.mark_ready(Component.LLM)
+        await model.warm_up()
+        if all(readiness.is_ready(c) for c in Component if c is not Component.LLM_WARMUP):
+            await parts.start_engine()
+        readiness.mark_ready(Component.LLM_WARMUP)
+    except Exception:
+        log.exception("실제 모델 적재·예열 또는 엔진 시작 실패")
 
 
 def create_app(settings: Settings | None = None, *, clock: Clock | None = None) -> FastAPI:
@@ -36,21 +56,33 @@ def create_app(settings: Settings | None = None, *, clock: Clock | None = None) 
                                                           settings.model_timeout_s)
         parts.records.start()
         if settings.fake_auto_ready:
-            for component in (Component.VAD, Component.STT, Component.TTS, Component.LLM, Component.LLM_WARMUP):
+            for component in (Component.VAD, Component.STT, Component.TTS):
                 readiness.mark_ready(component)
+            if settings.fake_model:
+                readiness.mark_ready(Component.LLM)
+                readiness.mark_ready(Component.LLM_WARMUP)
         # 기기 상태 화면의 장치·시스템 칸을 주기적으로 갱신하고 바뀐 부분은 status.changed로 보낸다
         device_status = app.state.device_status = DeviceStatus(parts, readiness, settings)
         device_status.start()
-        # 준비가 끝났으면 새 세션(T_WELCOME)이나 같은 부팅의 스냅샷에서 이어 간다(T_RESUME).
-        # 실제 부품을 백그라운드로 적재하게 되면(키트 단계) 끝난 뒤에 시작한다
+        # 실제 모델은 서버를 켠 뒤 백그라운드로 적재·예열한다(그동안 /api/health는 ready: false). 끝나면 엔진을 시작한다
+        real_model = None if settings.fake_model else cast(LoadedModel, parts.model)
+        model_loading = app.state.model_loading = (
+            None if real_model is None else asyncio.create_task(_prepare_model(real_model, parts, readiness)))
+        # 준비가 끝났으면 새 세션(T_WELCOME)이나 같은 부팅의 스냅샷에서 이어 간다(T_RESUME)
         if readiness.ready:
             await parts.start_engine()
         yield
+        if model_loading is not None:
+            model_loading.cancel()  # 적재 중이면 그 네이티브 호출이 끝난 뒤 멈춘다
+            with suppress(asyncio.CancelledError):
+                await model_loading
         parts.events.close_all()  # 남은 구독 정리(python -m app.run이면 연결을 기다리기 전에 이미 닫음)
         await device_status.stop()
         await speech_capture.close()  # 녹음·처리 중인 말하기 버튼 턴을 멈춘 뒤 엔진을 멈춘다
         await parts.engine.stop()
         await parts.records.close()  # 엔진을 멈춘 뒤 남은 기록 쓰기를 마친다
+        if real_model is not None:
+            await real_model.close()  # 실제 모델은 턴이 다 끝난 뒤 내려놓아 메모리를 돌려준다
 
     app = FastAPI(
         title="살려드림 백엔드",

@@ -20,6 +20,11 @@ dev = [
     "pytest-asyncio>=0.23",
     "httpx>=0.27",
 ]
+# PC에서 실제 모델(app/services/hf_model.py)을 돌릴 때만. 키트(NPU)는 키트용 실행기를 쓴다
+model = [
+    "torch>=2.9,<2.10",  # 2.9.0에서만 확인함(2.15는 macOS 14의 MPS(맥 GPU)에서 멈춤, 2.10~2.14는 확인 안 함)
+    "transformers>=4.57",
+]
 
 [tool.setuptools.packages.find]
 include = ["app*"]
