@@ -1,4 +1,4 @@
-"""기기 버튼 API (명세서 "기기"): 구조신호, 음량, 타이머.
+"""기기 버튼 API (명세서 "기기"): 메트로놈, 구조신호, 음량, 타이머.
 
 화면 버튼을 DeviceCommand(source: button)로 바꿔 엔진 큐(device_button)에 넣는다. 음성 명령과 같은 규칙(6-10)을 탄다.
 응답은 엔진이 받아들인 결과만 바로 주고, 실제 상태는 이벤트(device.state, status.changed, session.updated)로 나간다.
@@ -59,7 +59,13 @@ def _require_speaker(state: SessionState) -> None:
         raise AppError(ErrorCode.DEVICE_UNAVAILABLE, "스피커가 연결되지 않았습니다")
 
 
-class RescueSignalOut(BaseModel):
+def _require_buzzer(state: SessionState) -> None:
+    """부저는 메트로놈 전용이다. 메트로놈 장치의 연결 상태로 부저 연결을 본다."""
+    if not state.devices["metronome"].connected:
+        raise AppError(ErrorCode.DEVICE_UNAVAILABLE, "부저가 연결되지 않았습니다")
+
+
+class SoundDeviceOut(BaseModel):
     turn_id: str
     result: ButtonResult
     device: dict  # DeviceState에서 엔진 내부 칸(want)을 뺀 것
@@ -69,26 +75,42 @@ def _device_view(device: DeviceState) -> dict:
     return device.model_dump(exclude={"want"})
 
 
-async def _rescue_signal(request: Request, on: bool):
-    _require_speaker(request.app.state.parts.engine.state)
-    pressed = await _press(request, 4, 1 if on else 2)
-    return ok(RescueSignalOut(
+async def _sound_device(request: Request, obj: int, name: str, on: bool):
+    """소리 기능(메트로놈·구조신호) 버튼. 이미 같은 상태면 엔진이 장치 명령 없이 그렇다는 문장만 읽는다(already)."""
+    pressed = await _press(request, obj, 1 if on else 2)
+    return ok(SoundDeviceOut(
         turn_id=pressed.turn_id,
-        result=_button_result(pressed, already=not _commanded(pressed.result, 4)),
-        device=_device_view(pressed.result.state.devices["rescue_signal"]),
+        result=_button_result(pressed, already=not _commanded(pressed.result, obj)),
+        device=_device_view(pressed.result.state.devices[name]),
     ))
 
 
-@router.post("/rescue-signal/on", response_model=OkResponse[RescueSignalOut], dependencies=[Depends(require_ready)])
+@router.post("/metronome/on", response_model=OkResponse[SoundDeviceOut], dependencies=[Depends(require_ready)])
+async def metronome_on(request: Request):
+    """메트로놈 켜기(분당 110회). T_DEV_METRO_ON을 읽고 그 문장이 끝난 직후 켠다. 박자 상태는 device.state로 보낸다."""
+    _require_buzzer(request.app.state.parts.engine.state)
+    return await _sound_device(request, 2, "metronome", on=True)
+
+
+@router.post("/metronome/off", response_model=OkResponse[SoundDeviceOut], dependencies=[Depends(require_ready)])
+async def metronome_off(request: Request):
+    """메트로놈 끄기. T_DEV_METRO_OFF를 읽고 그 문장이 끝난 직후 끈다. 가슴압박 중이어도 막지 않는다."""
+    _require_buzzer(request.app.state.parts.engine.state)
+    return await _sound_device(request, 2, "metronome", on=False)
+
+
+@router.post("/rescue-signal/on", response_model=OkResponse[SoundDeviceOut], dependencies=[Depends(require_ready)])
 async def rescue_signal_on(request: Request):
     """구조신호 켜기. T_DEV_SOS_ON을 읽고 그 문장이 끝난 직후 켠다. 울리는 상태는 device.state로 보낸다."""
-    return await _rescue_signal(request, on=True)
+    _require_speaker(request.app.state.parts.engine.state)
+    return await _sound_device(request, 4, "rescue_signal", on=True)
 
 
-@router.post("/rescue-signal/off", response_model=OkResponse[RescueSignalOut], dependencies=[Depends(require_ready)])
+@router.post("/rescue-signal/off", response_model=OkResponse[SoundDeviceOut], dependencies=[Depends(require_ready)])
 async def rescue_signal_off(request: Request):
     """구조신호 끄기. T_DEV_SOS_OFF를 읽고 그 문장이 끝난 직후 끈다."""
-    return await _rescue_signal(request, on=False)
+    _require_speaker(request.app.state.parts.engine.state)
+    return await _sound_device(request, 4, "rescue_signal", on=False)
 
 
 class SpeakerView(BaseModel):

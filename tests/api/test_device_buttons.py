@@ -1,4 +1,4 @@
-"""기기 버튼 API (명세서 "기기"): 구조신호, 음량, 타이머."""
+"""기기 버튼 API (명세서 "기기"): 메트로놈, 구조신호, 음량, 타이머."""
 import asyncio
 
 import pytest
@@ -184,6 +184,110 @@ async def test_rescue_signal_speaker_unavailable(kit):
 
 @pytest.mark.parametrize("path", ["/api/rescue-signal/on", "/api/rescue-signal/off"])
 def test_rescue_signal_before_ready_is_503(client, path):
+    res = client.post(path)
+    assert res.status_code == 503 and res.json()["error"]["code"] == "NOT_READY"
+
+
+def metronome_states(kit: Kit) -> list[dict]:
+    return [e.data for e in kit.events if e.type == "device.state" and e.data["name"] == "metronome"]
+
+
+async def test_metronome_on_shape_and_result(kit):
+    mark = len(kit.spoken)
+    data = await press(kit, "/api/metronome/on")
+    assert list(data) == ["turn_id", "result", "device"]
+    assert data["turn_id"].startswith("t_") and data["result"] == "pending"
+    assert list(data["device"]) == DEVICE_KEYS  # 엔진 내부 칸(want)은 내보내지 않는다
+    device = data["device"]
+    assert (device["object"], device["name"], device["status"], device["detail"]) == (2, "metronome", "pending",
+                                                                                      {"bpm": 110})
+    await kit.settle()
+    assert kit.parts.devices.on == {2}
+    assert [(c.object, c.type, c.source) for c in kit.parts.devices.commands] == [(2, 1, "button")]
+    assert templates_since(kit, mark) == ["T_DEV_METRO_ON"]
+    assert metronome_states(kit)[-1]["status"] == "on" and metronome_states(kit)[-1]["last_result"] == "success"
+
+
+async def test_metronome_off_after_on(kit):
+    await press(kit, "/api/metronome/on")
+    await kit.settle()
+    mark = len(kit.spoken)
+    data = await press(kit, "/api/metronome/off")
+    assert data["result"] == "pending" and data["device"]["status"] == "pending"
+    await kit.settle()
+    assert kit.parts.devices.on == set()
+    assert templates_since(kit, mark) == ["T_DEV_METRO_OFF"]
+    assert kit.state.devices["metronome"].status == "off"
+
+
+@pytest.mark.parametrize(("path", "template"), [("/api/metronome/off", "T_DEV_ALREADY_OFF"),
+                                                ("/api/metronome/on", "T_DEV_ALREADY_ON")])
+async def test_metronome_already(kit, path, template):
+    """이미 같은 상태면 already. 켜져 있을 때 켜기를 눌러도 끄지 않고, 장치에 명령을 내지 않는다."""
+    if path.endswith("/on"):
+        await press(kit, "/api/metronome/on")
+        await kit.settle()
+    sent, mark = len(kit.parts.devices.commands), len(kit.spoken)
+    data = await press(kit, path)
+    assert data["result"] == "already"
+    await kit.settle()
+    assert len(kit.parts.devices.commands) == sent
+    assert templates_since(kit, mark) == [template]
+    assert kit.parts.devices.on == ({2} if path.endswith("/on") else set())
+
+
+async def test_metronome_off_during_compression(kit):
+    """가슴압박 중(엔진이 켠 메트로놈)이어도 끄기를 막지 않는다. 압박 구간 표시(cpr)는 그대로다."""
+    await kit.say("사람이 쓰러졌는데 숨을 안 쉬어")
+    await kit.say("아니요 대답 없어요")
+    await kit.say("아니요")  # EM01-15: 메트로놈 켜짐, 압박 구간
+    assert kit.parts.devices.on == {2} and "cpr" in kit.state.flags
+    mark = len(kit.spoken)
+    data = await press(kit, "/api/metronome/off")
+    assert data["result"] == "pending"
+    await kit.settle()
+    assert kit.parts.devices.on == set() and kit.state.devices["metronome"].status == "off"
+    assert "T_DEV_METRO_OFF" in templates_since(kit, mark) and "cpr" in kit.state.flags
+
+
+async def test_metronome_queued_while_reading(kit):
+    """안내 문장을 읽는 중에 누르면 queued. 읽던 문장이 끝난 뒤 확인 문장을 읽고 켠다."""
+    speaker = await reading_guidance(kit)
+    data = await press(kit, "/api/metronome/on")
+    assert data["result"] == "queued" and data["device"]["queued"] == {"type": 1, "source": "button"}
+    assert kit.parts.devices.on == set()  # 아직 켜지 않았다
+    speaker.release()
+    await kit.settle()
+    assert kit.parts.devices.on == {2} and kit.state.devices["metronome"].queued is None
+    said = [u.template_id or u.step_id for u in speaker.spoken]
+    assert said.index("T_DEV_METRO_ON") > said.index(kit.state.step_id)  # 읽던 질문 뒤에 확인 문장
+
+
+async def test_metronome_off_cancels_queued_on(kit):
+    """대기 중인 켜기에 끄기를 누르면 대기를 취소한다. 부저는 켜기·끄기 명령을 받지 않는다."""
+    speaker = await reading_guidance(kit)
+    await press(kit, "/api/metronome/on")
+    data = await press(kit, "/api/metronome/off")
+    assert data["device"]["queued"] is None and data["device"]["status"] == "off"
+    speaker.release()
+    await kit.settle()
+    assert [c for c in kit.parts.devices.commands if c.object == 2] == [] and kit.parts.devices.on == set()
+    cancelled = [(r.object, r.type, r.source) for r in kit.records
+                 if r.kind == "device_result" and r.result == "cancelled"]
+    assert cancelled == [(2, 1, "button")]
+
+
+@pytest.mark.parametrize("path", ["/api/metronome/on", "/api/metronome/off"])
+async def test_metronome_buzzer_unavailable(kit, path):
+    kit.state.devices["metronome"].connected = False
+    res = await kit.http.post(path)
+    assert res.status_code == 503
+    assert res.json() == {"ok": False, "error": {"code": "DEVICE_UNAVAILABLE", "message": "부저가 연결되지 않았습니다"}}
+    assert kit.parts.devices.commands == []
+
+
+@pytest.mark.parametrize("path", ["/api/metronome/on", "/api/metronome/off"])
+def test_metronome_before_ready_is_503(client, path):
     res = client.post(path)
     assert res.status_code == 503 and res.json()["error"]["code"] == "NOT_READY"
 
