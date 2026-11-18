@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     port: int = 8000
     # 기본 Swagger(/docs)는 CDN 스크립트를 불러오므로 개발 중에만 켠다
     enable_docs: bool = False
+    # 브라우저(Expo 웹)에서 API를 부를 수 있게 허용할 화면 주소(CORS). 앱(iOS·Android)은 CORS를 검사하지 않아 필요 없다
+    # 환경변수는 JSON 배열로 준다 (예: SALYEO_CORS_ORIGINS='["http://192.168.0.5:8081"]'). 빈 배열이면 CORS를 켜지 않는다
+    cors_origins: list[str] = ["http://localhost:8081", "http://127.0.0.1:8081"]
     # 서버를 끌 때 열린 연결이 끝나기를 기다리는 최대 시간(초, uvicorn timeout_graceful_shutdown). TODO(미정: 임시값)
     shutdown_timeout_s: float = 3
 

@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager, suppress
 from typing import cast
 
 from fastapi import APIRouter, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.api import device_status, devices, events, location, manuals, mic, records, session, speech, system, utterances
@@ -95,6 +96,15 @@ def create_app(settings: Settings | None = None, *, clock: Clock | None = None) 
     app.state.readiness = Readiness()
     app.state.turn_lock = TurnLock()
     install_error_handlers(app)
+    # Expo 웹 화면(다른 포트)에서 부르는 요청 허용. POST의 Content-Type: application/json과
+    # SSE의 Cache-Control 헤더 때문에 브라우저가 OPTIONS(사전 요청)를 먼저 보낸다. 쿠키는 쓰지 않는다
+    if settings.cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=settings.cors_origins,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     # 인증 없음: 화면은 키트가 만든 전용 Wi-Fi(AP)에서만 접속하고, 접근은 Wi-Fi 비밀번호로 막는다
     api = APIRouter(prefix="/api")
