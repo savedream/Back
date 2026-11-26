@@ -11,10 +11,30 @@
 사용자의 말을 키트 안에서 인식·해석하고, 매뉴얼 DB에 따라 처치 절차를 음성과 화면으로 안내합니다.  
 실행 중에는 인터넷을 쓰지 않습니다.
 
----
-## ✨기술 스택
+| 저장소 | 설명 |
+|---|---|
+| [savedream](https://github.com/savedream) | 조직 소개 (다이어그램, 주요 기능, 데모) |
+| [Front](https://github.com/savedream/Front) | 아이패드 화면 (React Native, Expo) |
+| **Back** (이 저장소) | 키트 백엔드 (FastAPI, 절차 엔진, 처치 기록) |
 
-### 백엔드 (FastAPI, 온디바이스)
+---
+
+## 👥 팀 소개
+
+2026-2학기 모바일시스템응용프로젝트(산학협력, 마음AI 멘토링) 7반 1팀 「취업하고싶다」
+
+| 이름 | 역할 | GitHub |
+|---|---|---|
+| 최용주 | 팀장, Backend | [YJEND](https://github.com/YJEND) |
+| 조주한 | Backend | [zzuhannn](https://github.com/zzuhannn) |
+| 홍성환 | AI 모델 | [12hsh12](https://github.com/12hsh12) |
+| 윤세연 | Frontend | [tpdus112](https://github.com/tpdus112) |
+| 유민호 | Frontend | [yoominho114](https://github.com/yoominho114) |
+
+---
+
+## ✨ 기술 스택
+
 | 구분 | 기술 |
 |------|------|
 | 언어 | Python 3.10+ |
@@ -29,7 +49,49 @@
 
 ---
 
-### 실행
+## 🔎 현재 상태
+
+- 키트(QCS6490)에 올려 실제 모델·음성(VAD·STT·TTS)·GPS·스피커를 연결해 전체 흐름이 동작하는 것을 확인했습니다. 키트에 부저가 없어 메트로놈 박자도 스피커로 냅니다.
+- 키트용 부품 연결 코드는 키트에만 있고 이 저장소에는 포함하지 않았습니다.
+- 이 저장소의 기본 실행은 **가짜 부품 모드**입니다. 모델은 정해 둔 문장 표(`app/fakes/fake_model_table.json`), 마이크·STT·스피커·GPS·기기·전원은 가짜 부품을 써서 키트 없이 PC에서 API 전체를 시험할 수 있습니다.
+- 실제 부품은 `app/services`의 자리(Protocol)에 끼웁니다. PC용 실제 모델 실행(`app/services/hf_model.py`)은 아래 "실제 모델로 실행"을 보세요.
+
+---
+
+## 🗂️ 폴더 구조
+
+```
+app/
+├── api/        REST·SSE 엔드포인트 (/api/...)
+├── core/       부품 조립, 준비 상태, 한 턴 처리(정규화 → 모델 → 파서 → 엔진), 말하기 녹음, 기기 상태 갱신
+├── services/   절차 엔진(procedure_engine), 매뉴얼 DB, 모델 실행, 처치 기록(SQLite), 이벤트, 부품 자리(Protocol)
+├── fakes/      가짜 부품 (모델 문장 표, 마이크·STT, 스피커, GPS, 기기, 전원)
+├── schemas/    요청·응답·이벤트 데이터 형식
+└── common/     응답 봉투, 오류 코드
+data/           매뉴얼 DB (manual_db.json, v1.7)
+tests/          unit · api · scenario · integration
+tools/          매뉴얼 DB 검사, 실제 모델 출력 비교
+```
+
+---
+
+## 🔌 API
+
+응답은 `{"ok": true, "data": ...}` 또는 `{"ok": false, "error": {"code", "message"}}` 형식입니다. 화면 상태는 이벤트 스트림(SSE)으로 바뀝니다.
+
+| 기능 | 엔드포인트 |
+|---|---|
+| 시스템 | `GET /api/health` · `POST /api/system/shutdown` |
+| 말하기·마이크 | `POST /api/speech/start` · `/stop` · `/restart` · `POST /api/mic/pause` · `/resume` · `POST /api/utterances` (문장 시험용) |
+| 기기 | `POST /api/metronome/on` · `/off` · `POST /api/rescue-signal/on` · `/off` · `POST /api/volume/up` · `/down` · `POST /api/timer/start` · `/pause` · `/reset` · `GET /api/devices` |
+| 위치 | `GET /api/location` · `POST /api/location/announce` |
+| 매뉴얼 | `GET /api/manuals` · `GET /api/manuals/{manual_id}` |
+| 세션·기록 | `GET /api/session` · `GET /api/session/log` · `POST /api/session/reset` · `POST /api/records/retry` |
+| 이벤트 | `GET /api/events` (SSE) |
+
+---
+
+## ▶️ 실행
 
 ```bash
 python -m venv .venv
@@ -47,6 +109,20 @@ pip install -e ".[dev]"
 설정값은 `SALYEO_` 접두사 환경변수로 바꿀 수 있습니다 (예: `SALYEO_PORT=9000`).
 `uvicorn app.main:app`으로도 뜨지만, 그때는 이벤트 스트림(`/api/events`)을 연 채 끄면 `--timeout-graceful-shutdown`까지(안 주면 끝없이) 기다립니다.
 
+웹 브라우저(Expo 웹)에서 API를 부르려면 화면 주소를 `SALYEO_CORS_ORIGINS`에 JSON 배열로 줍니다 (기본 `["http://localhost:8081", "http://127.0.0.1:8081"]`, 빈 배열이면 끔). iOS·Android 앱은 필요 없습니다.
+
+#### 도커로 실행 (가짜 부품)
+
+파이썬 없이 Docker Desktop(Windows는 WSL2)만 있으면 됩니다.
+
+```bash
+git clone https://github.com/savedream/Back.git
+cd Back
+docker compose up --build
+```
+
+`http://localhost:8000/api/health`에서 `"ready": true`가 보이면 준비된 것입니다. 처치 기록은 컨테이너 안에 저장되어 `docker compose down`을 하면 지워집니다.
+
 #### 실제 모델로 실행 (PC)
 
 기본은 가짜 모델(정해 둔 문장 표)입니다. 받은 모델 폴더(`config.json`, `model.safetensors`, `tokenizer.json`, `tokenizer_config.json`, `generation_config.json`)를 저장소 밖에 두고 실행합니다.
@@ -60,21 +136,6 @@ SALYEO_FAKE_MODEL=false SALYEO_MODEL_DIR=../models/maum python -m app.run
 같은 환경변수를 주고 `pytest tests/scenario`를 돌리면 시나리오 시험을 실제 모델로 돌립니다.
 
 ---
-
-### Git 명령어
-
-| 명령어 | 설명 |
-| --- | --- |
-| `git clone <url>` | 원격 저장소 복제 |
-| `git add .` | 전체 변경 파일 스테이징 |
-| `git add <파일명>` | 특정 파일만 스테이징 |
-| `git commit -m "메시지"` | 커밋 메시지와 함께 커밋 |
-| `git log` | 커밋 히스토리 확인 |
-| `git branch` | 현재 브랜치 목록 확인 |
-| `git checkout <이름>` | 해당 브랜치로 이동 |
-| `git checkout -b <이름>` | 새 브랜치 생성 + 이동 |
-| `git push` | 현재 브랜치 내용을 원격 `main`에 푸시 |
-| `git pull origin main` | 원격 `main` 브랜치 내용 가져오기 (병합) |
 
 ## 🌿 Git Flow 브랜치 전략 (with `main`) 🌿
 
