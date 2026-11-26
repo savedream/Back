@@ -23,13 +23,19 @@
 
 2026-2학기 모바일시스템응용프로젝트(산학협력, 마음AI 멘토링) 7반 1팀 「취업하고싶다」
 
-| 이름 | 역할 | GitHub |
-|---|---|---|
-| 최용주 | 팀장, Backend | [YJEND](https://github.com/YJEND) |
-| 조주한 | Backend | [zzuhannn](https://github.com/zzuhannn) |
-| 홍성환 | AI 모델 | [12hsh12](https://github.com/12hsh12) |
-| 윤세연 | Frontend | [tpdus112](https://github.com/tpdus112) |
-| 유민호 | Frontend | [yoominho114](https://github.com/yoominho114) |
+<div align="center">
+
+<table>
+  <tr>
+    <td align="center" width="20%"><a href="https://github.com/12hsh12"><img src="https://github.com/12hsh12.png?size=120" width="96" alt="12hsh12"/><br/><b>Hong Sunghwan</b></a><br/><sub>🧠 AI 모델</sub></td>
+    <td align="center" width="20%"><a href="https://github.com/tpdus112"><img src="https://github.com/tpdus112.png?size=120" width="96" alt="tpdus112"/><br/><b>윤세연</b></a><br/><sub>📱 Frontend</sub></td>
+    <td align="center" width="20%"><a href="https://github.com/yoominho114"><img src="https://github.com/yoominho114.png?size=120" width="96" alt="yoominho114"/><br/><b>yoominho114</b></a><br/><sub>📱 Frontend</sub></td>
+    <td align="center" width="20%"><a href="https://github.com/zzuhannn"><img src="https://github.com/zzuhannn.png?size=120" width="96" alt="zzuhannn"/><br/><b>zzuhannn</b></a><br/><sub>🧰 Backend</sub></td>
+    <td align="center" width="20%"><a href="https://github.com/YJEND"><img src="https://github.com/YJEND.png?size=120" width="96" alt="YJEND"/><br/><b>Yongju Choi</b></a><br/><sub>🧰 Backend</sub></td>
+  </tr>
+</table>
+
+</div>
 
 ---
 
