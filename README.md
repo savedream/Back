@@ -131,7 +131,6 @@ docker compose up --build
 
 #### 실제 모델로 실행 (PC)
 
-기본은 가짜 모델(정해 둔 문장 표)입니다. 받은 모델 폴더(`config.json`, `model.safetensors`, `tokenizer.json`, `tokenizer_config.json`, `generation_config.json`)를 저장소 밖에 두고 실행합니다.
 
 ```bash
 pip install -e ".[dev,model]"
